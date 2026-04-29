@@ -1,0 +1,28 @@
+#pragma once
+#include <opencv2/objdetect/aruco_detector.hpp>
+namespace cv::aruco{
+
+class CharucoBoard2{
+public:
+    cv::Size bSize={-1,-1};
+    Dictionary  dictionary;
+
+
+    CharucoBoard2();
+    CharucoBoard2(cv::Size bSize, const Dictionary &dictionary);
+    void generateImage(float markerSizePix, Mat& outImage) const;
+};
+
+class     CharucoDetector2{
+    CharucoBoard2 board;
+public:
+    CharucoDetector2(const CharucoBoard2& board);
+    void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
+private:
+        //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
+    int getGlobalCornerID(int marker_id,int corner_id) const;
+    //opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
+    std::vector<std::pair<int,int>>  getMarkerCornersFromGlobalCornerID( int gid)const;
+};
+
+}

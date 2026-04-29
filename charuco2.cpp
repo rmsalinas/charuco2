@@ -1,0 +1,828 @@
+#include "charuco2.h"
+#include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/highgui.hpp>
+#include <map>
+namespace    charuconano{
+/**
+ * @brief The Marker class is a marker detectable by the library
+ * It is a vector where each corner is a corner of the detected marker
+ */
+class Marker : public std::vector<cv::Point2f>
+{
+public:
+    // id of  the marker
+    int id=-1;
+    //id of the dict
+    int dict=-1;
+};
+struct DetectorParameters {
+    int boxFilterSize=15,thres=3; //values for adaptive thresholding
+    int minSize=10;//minimum size of a contour side to be considered as a marker candidate
+    int maxAttemptsPerCandidate=5;//number of attempts to identify a candidate by slightly altering the corners
+    std::vector<cv::aruco::Dictionary> dicts= {cv::aruco::getPredefinedDictionary(cv::aruco::DICT_ARUCO_MIP_36h12)};
+    // [0,1] ; maximum number of times a contour can revisit any of its pixels (1 is the minimum which is the starting point)
+    //if you set a high value (std::numeric_limits<int>::max()) the algorithm behaves as the normal moore contour tracer
+    float maxTimesRevisited=0.05; //1 equals tradional algo,
+    /// number of bits of the marker border, i.e. marker border width (default 1).
+    float  markerBorderBits=1; //i do not see this useful. all dicts have 1 border bit but its used in opencv  aruco and I keep it here
+    double errorCorrectionRate=0;//The default 0.6 value in aruco opencv is very dangerous. It causes many false positives.
+    double maxErroneousBitsInBorderRate=0;//maximum rate of erroneous bits in the border. Default 0 means no error allowed.
+    bool detectInvertedMarker=false;//if the markers are printed in white over black background
+    float expansionDueToErosion=0;
+};
+/** @brief The MarkerDetector class is detecting the markers in the image passed */
+class MarkerDetector{
+public:
+    // The only function you need to call
+    static inline std::vector<Marker> detect(const cv::Mat &img, const DetectorParameters &params=DetectorParameters(),std::vector<Marker> *candidatesOut=nullptr,cv::Mat thresImage=cv::Mat());
+private:
+    static inline Marker sort( const  Marker &marker);
+    static inline float  getSubpixelValue(const cv::Mat &im_grey,const cv::Point2f &p);
+    static inline int   getMarkerId(  cv::Mat  candidateBits,int &idx, int &nrotations, const DetectorParameters &params,int dictIndex);
+    static inline int isInto(const std::vector<cv::Point2f> &a, const std::vector<cv::Point2f> &b) ;
+    static std::vector<std::vector<cv::Point>> visitedAwareTracingContour(cv::Mat &padded, size_t minSize = 1,float maxRevisited=0.1) ;
+    static int getBorderErrors(const cv::Mat &bits, int markerSize, int borderSize) ;
+    static void thres255Adaptive(cv::Mat &in,cv::Mat &out,int off=2,int thres=5);
+    static bool isAInnerMarker(const cv::Mat &grey,const Marker &m);
+};
+struct Homographer{
+    Homographer(const std::vector<cv::Point2f> & out ){
+        std::vector<cv::Point2f>  in={cv::Point2f(0,0),cv::Point2f(1,0),cv::Point2f(1,1),cv::Point2f(0,1)};
+        H=cv::getPerspectiveTransform(in, out);
+    }
+    cv::Point2f operator()(const cv::Point2f &p){
+        double *m=H.ptr<double>(0);
+        double c=m[6]*p.x+m[7]*p.y+m[8];
+        return cv::Point2f((m[0]*p.x+m[1]*p.y+m[2])/c,(m[3]*p.x+m[4]*p.y+m[5])/c);
+    }
+    cv::Mat H;
+};
+//Marker intersection. Tells the marker with most corners into another. 0 if no intersection or tie
+int MarkerDetector::isInto(const std::vector<cv::Point2f> &a, const std::vector<cv::Point2f> &b) {
+    // Lambda for point-in-polygon test (Ray Casting)
+    auto countInside = [](const std::vector<cv::Point2f>& source, const std::vector<cv::Point2f>& target) -> int {
+        int count = 0;
+        for (const auto& pt : source) {
+            bool inside = false;
+            // Fixed 4-side loop logic
+            for (int i = 0, j = 3; i < 4; j = i++) {
+                if (((target[i].y > pt.y) != (target[j].y > pt.y)) &&
+                    (pt.x < (target[j].x - target[i].x) * (pt.y - target[i].y) / (target[j].y - target[i].y) + target[i].x)) {
+                    inside = !inside;
+                }
+            }
+            if (inside) count++;
+        }
+        return count;
+    };
+    // Count how many corners of A are in B
+    int aInB = countInside(a, b);
+    // Count how many corners of B are in A
+    int bInA = countInside(b, a);
+    // Rule 1: Must contain at least one corner
+    if (aInB == 0 && bInA == 0) return 0;
+    // Rule 2: Compare counts
+    if (aInB > bInA) return 1;
+    if (bInA > aInB) return 2;
+    // Default: Tie or no relative dominance
+    return 0;
+}
+
+std::vector<Marker>  MarkerDetector::detect(const cv::Mat &img, const DetectorParameters &params,std::vector<Marker> *candidatesOut,cv::Mat ThresImIn){
+    cv::Mat greyimage,thresImage;
+    std::vector<Marker> DetectedMarkers;
+    //first, convert to bw
+    if(img.channels()==3)
+        cv::cvtColor(img,greyimage,cv::COLOR_BGR2GRAY);
+    else greyimage=img;
+    /////////////////// Adaptive Threshold to detect border
+    //    cv::adaptiveThreshold(bwimage, thresImage, 255.,cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY_INV, params.boxFilterSize, params.Thres);
+    //this method is achieves a ~1.5 speed up
+    if(ThresImIn.empty()){
+        cv::boxFilter( greyimage, thresImage, greyimage.type(), cv::Size(params.boxFilterSize, params.boxFilterSize),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
+        thresImage=thresImage-greyimage;
+        cv::threshold(thresImage, thresImage, params.thres, 255, cv::THRESH_BINARY);
+    }
+    else{
+        thresImage=ThresImIn;
+    }
+    /////////////////// compute marker candidates by detecting contours
+    std::vector<std::vector<cv::Point>> contours;
+    std::vector<cv::Point> approxCurve;
+    cv::RNG rand;
+    //cv::findContours(thresImage, contours, cv::noArray(), cv::RETR_LIST, cv::CHAIN_APPROX_NONE);
+    int  minSizeSq=params.minSize*params.minSize,minSize4=4*params.minSize;
+    contours=visitedAwareTracingContour(thresImage,minSize4,params.maxTimesRevisited);
+
+    //decide where to store the candidates. If candidatesOut is not null, store there, otherwise use a local variable
+    std::vector<Marker> candidateslocal;
+    if(candidatesOut!=nullptr) {
+        candidatesOut->clear();
+    }
+    else{
+        candidatesOut=&candidateslocal;
+    }
+    ///////////////// for each contour, approx to a rectangle
+    for (unsigned int i = 0; i < contours.size(); i++)
+    {
+        // can approximate to a convex rect?
+        cv::approxPolyDP(contours[i], approxCurve, double(contours[i].size()) * 0.03, true);
+        if (approxCurve.size() != 4 || !cv::isContourConvex(approxCurve)) continue;
+        //check distance  between corners at least minSize pix
+        if(  ((approxCurve[0].x-approxCurve[1].x)*(approxCurve[0].x-approxCurve[1].x) + (approxCurve[0].y-approxCurve[1].y)*(approxCurve[0].y-approxCurve[1].y))<minSizeSq) continue;
+        if(  ((approxCurve[1].x-approxCurve[2].x)*(approxCurve[1].x-approxCurve[2].x) + (approxCurve[1].y-approxCurve[2].y)*(approxCurve[1].y-approxCurve[2].y))<minSizeSq) continue;
+        if(  ((approxCurve[2].x-approxCurve[3].x)*(approxCurve[2].x-approxCurve[3].x) + (approxCurve[2].y-approxCurve[3].y)*(approxCurve[2].y-approxCurve[3].y))<minSizeSq) continue;
+        if(  ((approxCurve[3].x-approxCurve[0].x)*(approxCurve[3].x-approxCurve[0].x) + (approxCurve[3].y-approxCurve[0].y)*(approxCurve[3].y-approxCurve[0].y))<minSizeSq) continue;
+        // add the points
+        Marker marker;marker.reserve(4);
+        for (int j = 0; j < 4; j++)
+            marker.emplace_back( cv::Point2f( approxCurve[j].x,approxCurve[j].y));
+        //sort corner in clockwise direction
+        marker=sort(marker);
+        //specific of charuco2 because we have shrink the borders, we will expand the corners a bit
+        //lets go with the first two marker[0], and marker[2]
+        std::vector<cv::Point2f> newPoints;
+        for(int i=0;i<4;i++){
+            int idx0=i;
+            int idx1=(i+2) % 4;
+            auto dif=marker[idx0]-marker[idx1];
+            auto norm=cv::norm(dif);
+            auto p= marker[idx1]+  ((dif)/norm)*(norm+params.expansionDueToErosion   );
+            newPoints.push_back(p);
+        }
+        //replace the points by the new ones
+        for(int i=0;i<4;i++){
+            marker[i]=newPoints[i];
+        }
+
+        //check no point is too close to the border (which may cause error in corner subpix), leave at least 11 pixs
+        bool discardBcTooCloseToBorder=false;
+        for(auto p:marker){
+            if(p.x<11 || p.y<11 || p.x>greyimage.cols-11 || p.y>greyimage.rows-11) {discardBcTooCloseToBorder=true;break;}
+        }
+        if(discardBcTooCloseToBorder) continue;
+
+
+        candidatesOut->push_back(marker);
+    }
+
+
+
+    //now, for each candidate check bits inside
+    int dictIndex=-1;
+    for(auto dict:params.dicts){
+        std::vector<Marker> currDirMarkerDetected;
+        dictIndex++;
+        cv::Mat bits(dict.markerSize+2,dict.markerSize+2,CV_8UC1),bitadaptive(dict.markerSize+2,dict.markerSize+2,CV_8UC1);
+
+        for(auto it=candidatesOut->begin();it!=candidatesOut->end();){
+            auto marker=*it;
+
+            ////// extract the code. Obtain the intensities of the bits using  homography
+            for(int i=0;i<int(params.maxAttemptsPerCandidate) && marker.id==-1;i++){
+                //if not first attempt, we may wanna produce small random alteration of the corners
+                auto marker2=marker;
+                if( i!=0) for(int c=0;c<4;c++) {marker2[c].x+=rand.gaussian(0.75);marker2[c].y+=rand.gaussian(0.75);}//if not first, alter corner location
+                Homographer hom(marker2);
+                for(int r=0;r<bits.rows;r++){
+                    for(int c=0;c<bits.cols;c++){
+                        bits.at<uchar>(r,c)=uchar(0.5+getSubpixelValue(greyimage,hom(cv::Point2f(  float(c+0.5) / float(bits.cols) ,  float(r+0.5) / float(bits.rows)  ))));
+                    }
+                }
+                if(i==2){ // if not working the first time, try this time adaptive threshold into the bits to improve robustness to lighting
+                    thres255Adaptive(bits,bitadaptive);
+                    bitadaptive.copyTo(bits);
+                }
+                else{
+                    cv::threshold(bits,bits,0,255,cv::THRESH_OTSU);
+                }
+                //now, analyze the inner code to see it if is a marker. If so, rotate to have the points properly sorted
+                int nrotations=0;
+                if(getMarkerId(bits,marker.id,nrotations,params,dictIndex)==0) continue;
+                std::rotate(marker.begin(),marker.begin() + 4 - nrotations,marker.end());
+            }
+            if(marker.id!=-1) {
+                marker.dict=dictIndex;
+                currDirMarkerDetected.push_back(marker);
+                //remove from candidate list
+                it=candidatesOut->erase(it);
+            }
+            else it++;//go to next
+        }
+
+        /// REMOVAL OF INNER DUPLICATED DETECTIONS OF THE SAME MARKER(INNER AND OUTER BORDER)
+        std::sort(currDirMarkerDetected.begin(), currDirMarkerDetected.end(),[](const Marker &a,const Marker &b){return a.id<b.id;});
+        {
+            std::vector<bool> toRemove(currDirMarkerDetected.size(), false);
+            for (int i = 0; i < int(currDirMarkerDetected.size()) - 1; i++)
+            {
+                for (int j = i + 1; j < int(currDirMarkerDetected.size()) && !toRemove[i]; j++)
+                {
+                    if (currDirMarkerDetected[i].id == currDirMarkerDetected[j].id )
+                    {
+                        auto res=isInto(currDirMarkerDetected[i],currDirMarkerDetected[j]);
+                        if( res==1)toRemove[i]=true;
+                        else if( res==2)toRemove[j]=true;
+
+                    }
+                }
+            }
+            //now move to DetectedMarkers these not marked for removal
+            for (unsigned int i = 0; i < currDirMarkerDetected.size(); i++)
+                if (!toRemove[i]) DetectedMarkers.push_back(currDirMarkerDetected[i]);
+        }
+    }
+
+    //we want to remove the markers that are detected only with inner border, and thus are wrong
+    //for that, we will analyze points on both sides along the line between the corners, and remove these for which the
+    // color diff between them is below a threshold
+    for(size_t i=0;i<DetectedMarkers.size();i++){
+        if( isAInnerMarker(greyimage,DetectedMarkers[i])){
+            //swap it with the last one (if not this) and resize
+            if(i!=DetectedMarkers.size()-1) std::swap(DetectedMarkers[i],DetectedMarkers.back());
+            DetectedMarkers.pop_back();
+            i--;//stay in the same index to analyze the swapped one
+
+        }
+
+    }
+
+    ////// finally subpixel corner refinement
+    if(DetectedMarkers.size()>0 & false){
+        //detect the subpix region size based on the average size of the detected markers
+        double avrgLen=0;
+        for(auto m:DetectedMarkers){
+            for(int i=0;i<4;i++){
+                avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
+            }
+        }
+        avrgLen/=4*DetectedMarkers.size();
+        int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
+
+        std::vector<cv::Point2f> Corners;
+        for (const auto &m:DetectedMarkers)
+            Corners.insert(Corners.end(), m.begin(),m.end());
+
+         cv::cornerSubPix(greyimage, Corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
+        // copy back to the markers
+        for (unsigned int i = 0; i < DetectedMarkers.size(); i++)
+            for (int c = 0; c < 4; c++) DetectedMarkers[i][c] = Corners[i * 4 + c];
+    }
+    return DetectedMarkers;//DONE
+}
+/**
+ * @brief Tries to identify one candidate given the dictionary
+ * @return candidate typ. zero if the candidate is not valid,
+ *                           1 if the candidate is a black candidate (default candidate)
+ *                           2 if the candidate is a white candidate
+ */
+int MarkerDetector:: getMarkerId(cv::Mat candidateBits, int &idx, int &nrotations, const DetectorParameters &params,int dictIndex){
+    uint8_t typ=1;
+
+    if(params.detectInvertedMarker ) candidateBits=~candidateBits;
+    // analyze border bits
+    int maximumErrorsInBorder =int(params.dicts[dictIndex].markerSize * params.dicts[dictIndex].markerSize * params.maxErroneousBitsInBorderRate);
+    int borderErrors =getBorderErrors(candidateBits, params.dicts[dictIndex].markerSize, params.markerBorderBits);
+    if(borderErrors > maximumErrorsInBorder) return 0; // border is wrong
+    // take only inner bits
+    cv::Mat onlyBits =candidateBits.rowRange(params.markerBorderBits,candidateBits.rows - params.markerBorderBits).colRange(params.markerBorderBits, candidateBits.cols - params.markerBorderBits);
+    onlyBits/=255;
+    // try to indentify the marker
+    if(!params.dicts[dictIndex].identify(onlyBits, idx, nrotations, params.errorCorrectionRate))
+        return 0;
+    return typ;
+}
+/**
+  * @brief Return number of erroneous bits in border, i.e. number of white bits in border.
+  */
+int MarkerDetector::getBorderErrors(const cv::Mat &bits, int markerSize, int borderSize) {
+    int sizeWithBorders = markerSize + 2 * borderSize;
+    int totalErrors = 0;
+    for(int y = 0; y < sizeWithBorders; y++) {
+        for(int k = 0; k < borderSize; k++) {
+            if(bits.ptr<unsigned char>(y)[k] != 0) totalErrors++;
+            if(bits.ptr<unsigned char>(y)[sizeWithBorders - 1 - k] != 0) totalErrors++;
+        }
+    }
+    for(int x = borderSize; x < sizeWithBorders - borderSize; x++) {
+        for(int k = 0; k < borderSize; k++) {
+            if(bits.ptr<unsigned char>(k)[x] != 0) totalErrors++;
+            if(bits.ptr<unsigned char>(sizeWithBorders - 1 - k)[x] != 0) totalErrors++;
+        }
+    }
+    return totalErrors;
+}
+float MarkerDetector::getSubpixelValue(const cv::Mat &im_grey, const cv::Point2f &p) {
+    // 1. Get integer coordinates
+    const int ix = static_cast<int>(p.x);
+    const int iy = static_cast<int>(p.y);
+
+
+    //   Boundary Check: Ensure the 2x2 patch is within limits
+    // We check ix+1 and iy+1 because the interpolation looks at the next pixel over.
+    if (ix < 0 || iy < 0 || ix >= im_grey.cols - 1 || iy >= im_grey.rows - 1) {
+        // Option A: Return a default value
+        // Option B: Clamp the point to the nearest valid boundary
+        return 0.0f;
+    }
+
+    // 2. Get fractional parts
+    const float dx = p.x - ix;
+    const float dy = p.y - iy;
+    // 3. Optimized Pointer Access
+    const uchar* ptr = im_grey.ptr<uchar>(iy) + ix;
+    const size_t step = im_grey.step;
+    // 4. Fetch the four pixels immediately as floats
+    const float p00 = static_cast<float>(ptr[0]);        // Top-Left
+    const float p01 = static_cast<float>(ptr[1]);        // Top-Right
+    const float p10 = static_cast<float>(ptr[step]);     // Bottom-Left
+    const float p11 = static_cast<float>(ptr[step + 1]); // Bottom-Right
+    // 5. Separable Interpolation (3 Multiplications total)
+    const float top = p00 + dx * (p01 - p00);// Interpolate Top Row Horizontally
+    const float bot = p10 + dx * (p11 - p10);    // Interpolate Bottom Row Horizontallys
+    // Interpolate Vertically between Top and Bottom results
+    return top + dy * (bot - top);
+}
+Marker  MarkerDetector::sort( const  Marker &marker){
+    Marker res_marker=marker;
+    /// sort the points in anti-clockwise order
+    double dx1 = res_marker[1].x - res_marker[0].x;
+    double dy1 = res_marker[1].y - res_marker[0].y;
+    double dx2 = res_marker[2].x - res_marker[0].x;
+    double dy2 = res_marker[2].y - res_marker[0].y;
+    double o = (dx1 * dy2) - (dy1 * dx2);
+    // if the third point is in the left side, then sort in anti-clockwise order
+    if (o < 0.0)  std::swap(res_marker[1], res_marker[3]);
+    return res_marker;
+}
+/**
+ * @brief Traces the contours of a binary image using our visited aware Tracing algorithm.
+ *
+ * This function scans a binary image (foreground as 255, background as 0) and
+ * finds the external boundaries of all distinct objects.
+ */
+std::vector<std::vector<cv::Point>> MarkerDetector::visitedAwareTracingContour(cv::Mat &padded, size_t minSize, float maxRevisited ) {
+    if (padded.empty() || padded.type() != CV_8UC1) return {};
+    // 1. Fast Initialization and Padding
+    int rows = padded.rows;
+    int cols = padded.cols;
+    int32_t step = padded.step;
+    uchar* data = padded.data;
+    // Fast clear of top and bottom rows
+    memset(data, 0, cols);
+    memset(data + (rows - 1) * step, 0, cols);
+    // Fast clear of left and right columns
+    for (int r = 1; r < rows - 1; ++r) {
+        uchar* row_ptr = data + r * step;
+        row_ptr[0] = 0;
+        row_ptr[cols - 1] = 0;
+    }
+    // 2. Precompute Neighbor Offsets based on image stride This removes the need for Point arithmetic in the loop
+    const int offsets[16]={-1,-step-1,-step,-step+1,1,step+1,step,step-1, -1,-step-1,-step,-step+1,1,step+1,step,step-1, };
+    // Use static tables to avoid initialization overhead on every call // 8-connectivity offsets relative to center (0,0) // Order: W, NW, N, NE, E, SE, S, SW
+    const int dx[8] = { -1, -1,  0,  1, 1, 1, 0, -1 }, dy[8] = {  0, -1, -1, -1, 0, 1, 1,  1 };
+    // Pre-allocate results
+    std::vector<std::vector<cv::Point>> contours;contours.reserve(2048);
+    std::vector<cv::Point> buffer;buffer.reserve(2048);
+    const uchar FOREGROUND = 255, BACKGROUND = 0,VISITED = 100;
+    // 3. Scanning Loop
+    // We iterate using raw pointers for maximum speed
+    int rowStep=1;//std::max(1,int(minSize/6));
+    for (int r = 1; r < rows - 1; r+=rowStep) {
+        uchar* row_ptr = data + r * step;
+        for (int c = 1; c < cols - 1;  ) {
+            ////findStartContourPoint
+            {
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+                cv::v_uint8 v_zero = cv::vx_setzero_u8();
+                for (; c <= cols - cv::VTraits<cv::v_uint8>::vlanes(); c+= cv::VTraits<cv::v_uint8>::vlanes())
+                {
+                    cv::v_uint8 vmask = (cv::v_ne(cv::vx_load((uchar*)(row_ptr + c)), v_zero));
+                    if (v_check_any(vmask))
+                    {
+                        c += v_scan_forward(vmask);
+                        break;
+                    }
+                }
+#endif
+                //process last tail
+                for (; c < cols && !row_ptr[c]; ++c) ;//last tail
+            }
+            if( c==cols) break;//reached end of row
+            if (row_ptr[c] == FOREGROUND ) {// --- 4. Tracing Loop  if is foreground
+                buffer.clear();
+                int curr_x = c, curr_y = r,search_idx = 1 ;
+                uchar* curr_ptr = row_ptr + c,*start_ptr=curr_ptr;
+                size_t ntimesRevisited=0;
+                do {
+                    buffer.emplace_back(curr_x, curr_y);// Add point
+                    *curr_ptr = VISITED;// Mark as visited
+                    //showImage(padded);
+                    // Search for next foreground pixel. We search 8 neighbors starting from search_idx
+                    for (int i = 0; i < 8; ++i) {
+                        int idx = search_idx + i; // index into offsets (0..15)
+                        uchar* neighbor = curr_ptr + offsets[idx]; // Fast pointer arithmetic
+                        if (*neighbor != BACKGROUND) {
+                            // Found next boundary pixel
+                            curr_ptr = neighbor;
+                            int dir = (idx & 7);                             // Update Integer Coordinates using the small static tables(Use modulo 8 to get the distinct direction 0-7)
+                            int next_x=curr_x+dx[dir], next_y=curr_y+dy[dir];
+                            ntimesRevisited+= int(*neighbor == VISITED);
+                            curr_x = next_x;curr_y = next_y;
+                            search_idx = (dir + 5) & 7;
+                            break;
+                        }
+                    }
+                } while (curr_ptr != start_ptr );
+                size_t bufsize=buffer.size();
+                if (ntimesRevisited<= float(bufsize)*maxRevisited && bufsize >= minSize) {
+                    contours.push_back(buffer);
+                }
+            }
+            c++;//move to next pixel
+            ////findEndContourPoint
+            if ( row_ptr[c]){
+                {
+#if (CV_SIMD || CV_SIMD_SCALABLE)
+
+                    cv::v_uint8 v_zero = cv::vx_setzero_u8();
+                    for (; c <=  cols - cv::VTraits<cv::v_uint8>::vlanes(); c += cv::VTraits<cv::v_uint8>::vlanes())
+                    {
+                        cv::v_uint8 vmask = (cv::v_eq(cv::vx_load((uchar*)(row_ptr + c)), v_zero));
+                        if (cv::v_check_any(vmask))
+                        {
+                            c += cv::v_scan_forward(vmask);
+                            break;
+                        }
+                    }
+#endif
+                }
+                for (; c < cols && row_ptr[c]; ++c) ;//last tail
+            }
+        }
+    }
+    return contours;
+}
+bool MarkerDetector::isAInnerMarker(const cv::Mat &grey,const Marker &marker)
+{
+    // --- tunable parameters ---
+    const int   nSamplesPerEdge = 5;     // pairs along each edge
+    const float perpOffset      = 2.0f;  // pixels perpendicular to the edge
+    const float colorThreshold  = 30.0f; // mean |L-R| below this => inner marker
+    // --------------------------
+
+    // NOTE: replace `grey` with whatever member of MarkerDetector
+    // holds the grayscale input image (e.g. _grey, grayImage, ...).
+    const cv::Mat &img = grey;
+    if (img.empty() || img.type() != CV_8UC1) return false;
+
+
+    float totalDiff   = 0.f;
+    int   validPairs  = 0;
+
+    for (int i = 0; i < 4; ++i) {
+        const cv::Point2f &p1 = marker[i];
+        const cv::Point2f &p2 = marker[(i + 1) % 4];
+
+        cv::Point2f edge = p2 - p1;
+        float edgeLen = cv::norm(edge);
+        if (edgeLen < 1e-6f) continue;
+
+        cv::Point2f edgeDir = edge / edgeLen;
+        // perpendicular (rotate 90°): one side will be "outside",
+        // the other "inside" the polygon — we don't actually need
+        // to know which is which, only the magnitude of the difference.
+        cv::Point2f perp(-edgeDir.y, edgeDir.x);
+
+        for (int j = 1; j <= nSamplesPerEdge; ++j) {
+            // t in (0,1) — skip exact corners to avoid noise there
+            float t = float(j) / float(nSamplesPerEdge + 1);
+            cv::Point2f midPt = p1 + t * edge;
+
+            cv::Point2f leftPt  = midPt + perp * perpOffset;
+            cv::Point2f rightPt = midPt - perp * perpOffset;
+
+            float cL = getSubpixelValue(grey,leftPt);
+            float cR = getSubpixelValue(grey,rightPt);
+            if (cL < 0.f || cR < 0.f) continue; // out of image
+
+            totalDiff += std::fabs(cL - cR);
+            ++validPairs;
+        }
+    }
+
+    if (validPairs == 0) return false;
+
+    float avgDiff = totalDiff / validPairs;
+    return avgDiff < colorThreshold; // low contrast across the line => inner marker
+}
+
+
+void MarkerDetector::thres255Adaptive(cv::Mat &in,cv::Mat &out,int off,int thres){
+    cv::boxFilter( in, out, in.type(), cv::Size(off*2+1, off*2+1),
+                  cv::Point(-1,-1), true, 4 );
+
+    for(int i = 0; i < in.rows; i++ )
+    {
+        const uchar* sdata = in.ptr(i);
+        uchar* ddata = out.ptr(i);
+        for(int j = 0; j < in.cols; j++ )
+            ddata[j] = ((ddata[j]-thres  )< sdata[j]) *255;
+    }
+
+}
+void copyVector2Output(std::vector<Marker> &vec, cv::OutputArrayOfArrays out )   {
+    out.create((int)vec.size(), 1, CV_32FC2);
+    if(out.isMatVector()) {
+        for (unsigned int i = 0; i < vec.size(); i++) {
+            out.create(4, 1, CV_32FC2, i);
+            cv::Mat &m = out.getMatRef(i);
+            cv::Mat(cv::Mat(vec[i]).t()).copyTo(m);
+        }
+    }
+    else if(out.isUMatVector()) {
+        for (unsigned int i = 0; i < vec.size(); i++) {
+            out.create(4, 1, CV_32FC2, i);
+            cv::UMat &m = out.getUMatRef(i);
+            cv::Mat(cv::Mat(vec[i]).t()).copyTo(m);
+        }
+    }
+    else if(out.kind() == cv::_OutputArray::STD_VECTOR_VECTOR){
+        for (unsigned int i = 0; i < vec.size(); i++) {
+            out.create(4, 1, CV_32FC2, i);
+            cv::Mat m = out.getMat(i);
+            cv::Mat(cv::Mat(vec[i]).t()).copyTo(m);
+        }
+    }
+    else {
+        CV_Error(cv::Error::StsNotImplemented,
+                 "Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
+    }
+}
+std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Mat & thresImage,   int erosionIt)  {
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
+    cv::erode(thresImage, thresImage, kernel,{-1,-1},erosionIt);
+    charuconano::DetectorParameters params;
+    params.expansionDueToErosion=erosionIt;
+    params.dicts.push_back(dict);
+    return charuconano::MarkerDetector::detect(src_gray,params,nullptr,thresImage);
+
+}
+}
+
+
+cv::aruco::CharucoBoard2::CharucoBoard2()
+{
+
+}
+
+cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize,   const  Dictionary  &dictionary)
+{
+    this->bSize = bSize;
+    this->dictionary = dictionary;
+
+}
+
+void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage) const
+{
+
+    int nmarkers=bSize.area();
+    //check no more than allowed by the dictionary
+    if(nmarkers > dictionary.bytesList.rows){
+        CV_Error(cv::Error::StsBadArg, "Number of markers exceeds the number of markers in the dictionary");
+    }
+    // For simplicity, we will just create a blank image and draw the markers at fixed positions.
+    cv::Size imgSize(markerSizePix*bSize.width + markerSizePix , markerSizePix*bSize.height+markerSizePix);
+
+    int markerId=1;
+    outImage = Mat::zeros(imgSize, CV_8UC1);
+    outImage=255;
+    int startLineColor = 0; // White color for the markers
+    for(int y=0; y<bSize.height; y++){
+        int curMarkerColor=startLineColor;
+        for(int x= 0; x<bSize.width; x++,markerId++){
+                Mat markerImg;
+                dictionary.generateImageMarker(markerId, markerSizePix, markerImg);
+                // Place the marker in the correct position
+                int posX = x * markerSizePix + markerSizePix/2;
+                int posY = y * markerSizePix + markerSizePix/2;
+                if(curMarkerColor)
+                    markerImg=255-markerImg;
+                markerImg.copyTo(outImage(Rect(posX, posY, markerSizePix, markerSizePix)));
+                curMarkerColor= curMarkerColor==1?0:1; // Alternate marker colors
+
+            }
+        startLineColor=startLineColor==1?0:1; // Alternate marker colors
+        }
+
+        //now, draw blocks closing white markers in borders, first top and bottom rows, then left and right columns
+        for(int x=1;x<bSize.width;x+=2){
+            cv::rectangle(outImage,Rect(markerSizePix/2+x*markerSizePix,0,markerSizePix,markerSizePix/2),Scalar::all(0),FILLED);
+        }
+        for(int x=bSize.height%2;x<bSize.width;x+=2){
+            cv::rectangle(outImage,Rect(markerSizePix/2+x*markerSizePix,markerSizePix/2+markerSizePix*bSize.height ,markerSizePix,markerSizePix/2),Scalar::all(0),FILLED);
+
+        }
+        //now the left and right columns
+        for(int y=1;y<bSize.height;y+=2){
+            cv::rectangle(outImage,Rect(0,markerSizePix/2+y*markerSizePix,markerSizePix/2,markerSizePix),Scalar::all(0),FILLED);
+        }
+        for(int y=bSize.width%2;y<bSize.height;y+=2){
+        cv::rectangle(outImage,Rect(markerSizePix/2+markerSizePix*bSize.width,markerSizePix/2+y*markerSizePix,markerSizePix/2,markerSizePix),Scalar::all(0),FILLED);
+        }
+
+        //now, the 4 corners if needed
+        cv::rectangle(outImage,Rect(0,0,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
+        cv::rectangle(outImage,Rect(outImage.cols-markerSizePix/2,0,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
+        cv::rectangle(outImage,Rect(0,outImage.rows-markerSizePix/2,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
+        cv::rectangle(outImage,Rect(outImage.cols-markerSizePix/2,outImage.rows-markerSizePix/2,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
+}
+
+cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &board)
+{
+this->board=board;
+
+}
+void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgPoints, OutputArray objPoints, OutputArray markerIds) const
+{
+     std::vector<charuconano::Marker>  markers_black,markers_white;
+    cv::Mat src_gray;
+    if(image.channels()==3)
+        cvtColor(image, src_gray, cv::COLOR_BGR2GRAY);
+    else src_gray=image.getMat();
+    cv::Mat thresImage;
+
+    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
+    thresImage=thresImage-src_gray;
+    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
+    markers_black=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+
+    //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
+    for(auto m:markers_black){
+        auto n02=m[2]-m[0];
+        auto n02norm=cv::norm(n02);
+        auto p0=m[0]-(n02/n02norm)* (n02norm/8);
+        auto p1=m[0]+(n02/n02norm)* (n02norm/8);
+        cv::line(thresImage,p0,p1,Scalar::all(255),1);
+        p0=m[2]-(n02/n02norm)* (n02norm/8);
+        p1=m[2]+(n02/n02norm)* (n02norm/8);
+        cv::line(thresImage,p0,p1,Scalar::all(255),1);
+
+        //same for the other diagonal
+        auto n13=m[3]-m[1];
+        auto n13norm=cv::norm(n13);
+        p0=m[1]-(n13/n13norm)* (n13norm/8);
+        p1=m[1]+(n13/n13norm)* (n13norm/8);
+        cv::line(thresImage,p0,p1,Scalar::all(255),1);
+        p0=m[3]-(n13/n13norm)* (n13norm/8);
+        p1=m[3]+(n13/n13norm)* (n13norm/8);
+        cv::line(thresImage,p0,p1,Scalar::all(255),1);
+
+     }
+     thresImage=255-thresImage;
+    src_gray=255-src_gray;
+    markers_white=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+
+    // Combine results from both
+    std::vector<charuconano::Marker> allMarkers;
+    allMarkers.reserve(markers_black.size() + markers_white.size());
+    allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
+    allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
+
+    if(allMarkers.empty())return;
+
+    //now, lets unify the corners for subpixel analysis
+    //first, obtain the average position for each global corner id found
+    std::map<int,std::pair<cv::Point2f,int> > global_corners;
+    for(auto m:allMarkers){
+//        std::cout<<"marker="<<m.id<<" "<<      m[0]<<" "<<m[1]<<" "<<m[2]<<" "<<m[3]<<std::endl;
+        for(int c=0;c<4;c++){
+            int gid=getGlobalCornerID(m.id,c);
+            if (global_corners.find(gid)==global_corners.end())
+                global_corners[gid]={m[c],1};
+            else{
+                auto &p=global_corners[gid];
+                p.first+=m[c];
+                p.second++;
+            }
+        }
+    }
+    //now, average
+    cv::Mat ii=image.getMat();
+    for(auto &gc:global_corners){
+        gc.second.first=gc.second.first / float(gc.second.second);
+       // std::cout<<"marker="<<gc.first<<" "<<      gc.second.first<<std::endl;
+
+    }
+
+//    std::cout<<std::flush;
+
+    //////  subpixel corner refinement
+    // compute the window size for the subpixel refinement
+        double avrgLen=0;
+        for(auto m:allMarkers){
+            for(int i=0;i<4;i++){
+                avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
+            }
+        }
+        avrgLen/=4*allMarkers.size();
+        int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
+
+        //add the global corners to a single vector
+        std::vector<cv::Point2f> Corners;
+        for (const auto &m:global_corners)
+            Corners.push_back(m.second.first);
+        //refine the corners
+        cv::cornerSubPix(src_gray, Corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
+        // copy back to the global corners
+        int idex=0;
+        for(auto &gc:global_corners){
+            gc.second.first=Corners[idex++];
+        }
+
+        //now, assign the refined global corner positions back to the markers
+        for(auto [gid,corner_c]:global_corners){
+            //find in how many markers it is involved
+            for(auto [markerid,cornerid]:getMarkerCornersFromGlobalCornerID(gid)){
+                //see if the makrer id is detected
+                auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid](const charuconano::Marker &m){return m.id==markerid;});
+                if(it!=allMarkers.end()){
+                    (*it)[cornerid]=corner_c.first;
+                }
+            }
+        }
+
+
+
+    // 2. Unpack results into OutputArrayOfArrays
+    copyVector2Output(allMarkers, imgPoints);
+
+
+    // 3. Assign to output ids
+    std::vector<int> idsVec;
+    idsVec.reserve(allMarkers.size());
+    for (const auto& m : allMarkers) idsVec.push_back(m.id);
+
+    // Allocate and copy IDs
+    markerIds.create((int)idsVec.size(), 1, CV_32SC1);
+    cv::Mat(idsVec).copyTo(markerIds);
+}
+
+//given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
+
+int cv::aruco::CharucoDetector2::getGlobalCornerID(int marker_id, int corner_id) const
+{
+    //obtain the row, col of the marker_id
+    int row=(marker_id-1) / board.bSize.width;
+    int col=(marker_id-1) % board.bSize.width;
+    if(corner_id<=1){
+        return (board.bSize.width+1) *row +  col+  corner_id;
+    }
+    else if(corner_id==2){
+        return (board.bSize.width+1) *(row+1) +  col + 1;
+    }
+    else  {
+        return (board.bSize.width+1) *(row+1) +  col ;
+
+    }
+}
+
+std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFromGlobalCornerID( int gid)const
+{
+    std::vector<std::pair<int,int>> result; // pairs of (marker_id, corner_id)
+
+    int w = board.bSize.width;   // markers per row
+    int h = board.bSize.height;  // markers per col
+
+    // convert gid back to corner-grid coordinates
+    int cr = gid / (w + 1);   // corner row
+    int cc = gid % (w + 1);   // corner col
+
+    // This corner is the TL (corner 0) of marker at (row=cr, col=cc)
+    if (cr < h && cc < w) {
+        int marker_id = cr * w + cc + 1;
+        result.emplace_back(marker_id, 0);
+    }
+
+    // TR (corner 1) of marker at (row=cr, col=cc-1)
+    if (cr < h && cc - 1 >= 0) {
+        int marker_id = cr * w + (cc - 1) + 1;
+        result.emplace_back(marker_id, 1);
+    }
+
+    // BR (corner 2) of marker at (row=cr-1, col=cc-1)
+    if (cr - 1 >= 0 && cc - 1 >= 0) {
+        int marker_id = (cr - 1) * w + (cc - 1) + 1;
+        result.emplace_back(marker_id, 2);
+    }
+
+    // BL (corner 3) of marker at (row=cr-1, col=cc)
+    if (cr - 1 >= 0 && cc < w) {
+        int marker_id = (cr - 1) * w + cc + 1;
+        result.emplace_back(marker_id, 3);
+    }
+
+    return result;
+}
+
