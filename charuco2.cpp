@@ -29,7 +29,6 @@ struct DetectorParameters {
     double errorCorrectionRate=0;//The default 0.6 value in aruco opencv is very dangerous. It causes many false positives.
     double maxErroneousBitsInBorderRate=0;//maximum rate of erroneous bits in the border. Default 0 means no error allowed.
     bool detectInvertedMarker=false;//if the markers are printed in white over black background
-    float expansionDueToErosion=0;
 };
 /** @brief The MarkerDetector class is detecting the markers in the image passed */
 class MarkerDetector{
@@ -140,35 +139,14 @@ std::vector<Marker>  MarkerDetector::detect(const cv::Mat &img, const DetectorPa
             marker.emplace_back( cv::Point2f( approxCurve[j].x,approxCurve[j].y));
         //sort corner in clockwise direction
         marker=sort(marker);
-        //specific of charuco2 because we have shrink the borders, we will expand the corners a bit
-        //lets go with the first two marker[0], and marker[2]
-        std::vector<cv::Point2f> newPoints;
-        for(int i=0;i<4;i++){
-            int idx0=i;
-            int idx1=(i+2) % 4;
-            auto dif=marker[idx0]-marker[idx1];
-            auto norm=cv::norm(dif);
-            auto p= marker[idx1]+  ((dif)/norm)*(norm+params.expansionDueToErosion   );
-            newPoints.push_back(p);
-        }
-        //replace the points by the new ones
-        for(int i=0;i<4;i++){
-            marker[i]=newPoints[i];
-        }
-
         //check no point is too close to the border (which may cause error in corner subpix), leave at least 11 pixs
         bool discardBcTooCloseToBorder=false;
         for(auto p:marker){
             if(p.x<11 || p.y<11 || p.x>greyimage.cols-11 || p.y>greyimage.rows-11) {discardBcTooCloseToBorder=true;break;}
         }
         if(discardBcTooCloseToBorder) continue;
-
-
         candidatesOut->push_back(marker);
     }
-
-
-
     //now, for each candidate check bits inside
     int dictIndex=-1;
     for(auto dict:params.dicts){
@@ -245,30 +223,8 @@ std::vector<Marker>  MarkerDetector::detect(const cv::Mat &img, const DetectorPa
             i--;//stay in the same index to analyze the swapped one
 
         }
-
     }
-
-    ////// finally subpixel corner refinement
-    if(DetectedMarkers.size()>0 & false){
-        //detect the subpix region size based on the average size of the detected markers
-        double avrgLen=0;
-        for(auto m:DetectedMarkers){
-            for(int i=0;i<4;i++){
-                avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
-            }
-        }
-        avrgLen/=4*DetectedMarkers.size();
-        int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
-
-        std::vector<cv::Point2f> Corners;
-        for (const auto &m:DetectedMarkers)
-            Corners.insert(Corners.end(), m.begin(),m.end());
-
-         cv::cornerSubPix(greyimage, Corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
-        // copy back to the markers
-        for (unsigned int i = 0; i < DetectedMarkers.size(); i++)
-            for (int c = 0; c < 4; c++) DetectedMarkers[i][c] = Corners[i * 4 + c];
-    }
+    //no corner subpixel here
     return DetectedMarkers;//DONE
 }
 /**
@@ -560,13 +516,30 @@ void copyVector2Output(std::vector<Marker> &vec, cv::OutputArrayOfArrays out )  
                  "Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
     }
 }
+void copyVector2Output(const std::vector<int> &v, cv::OutputArray out) {
+    if (out.needed()) {
+        // cv::Mat(v) creates a matrix header pointing to the vector's data (no deep copy).
+        // copyTo(out) performs the actual deep copy into the output array.
+        cv::Mat(v).copyTo(out);
+    }
+}
+
+// Copies a vector of Point2f to an OutputArray
+void copyVector2Output(const std::vector<cv::Point2f> &v, cv::OutputArray out) {
+    if (out.needed()) {
+        cv::Mat(v).copyTo(out);
+    }
+}
 std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Mat & thresImage,   int erosionIt)  {
+
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
     cv::erode(thresImage, thresImage, kernel,{-1,-1},erosionIt);
     charuconano::DetectorParameters params;
-    params.expansionDueToErosion=erosionIt;
+    //params.expansionDueToErosion=erosionIt;
     params.dicts.push_back(dict);
+    cv::imshow("thes",thresImage);
     return charuconano::MarkerDetector::detect(src_gray,params,nullptr,thresImage);
+
 
 }
 }
@@ -732,7 +705,8 @@ std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFro
 }
 
 
-void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgPoints, OutputArray objPoints, OutputArray markerIds) const
+void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
+                                              InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds)
 {
     std::vector<charuconano::Marker>  markers_black,markers_white;
     cv::Mat src_gray;
@@ -741,10 +715,36 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     else src_gray=image.getMat();
     cv::Mat thresImage;
 
+
+    //BLACK MARKERS
     cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
     thresImage=thresImage-src_gray;
     cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
     markers_black=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+
+    //because we have shrink the borders for black markers, we will expand the corners a bit from the center
+    for(auto & marker:markers_black){
+        std::vector<cv::Point2f> newPoints;
+        for(int i=0;i<4;i++){
+            int idx0=i;
+            int idx1=(i+2) % 4;
+            auto dif=marker[idx0]-marker[idx1];
+            auto norm=cv::norm(dif);
+            auto p= marker[idx1]+  ((dif)/norm)*(norm+3   );
+            newPoints.push_back(p);
+        }
+        //replace the points by the new ones
+        for(int i=0;i<4;i++){
+            marker[i]=newPoints[i];
+        }
+    }
+
+    ///WHITE MARKERS
+    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(15,15),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
+    thresImage=thresImage-src_gray;
+    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
+
+
 
     //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
     for(auto m:markers_black){
@@ -766,7 +766,6 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
         p0=m[3]-(n13/n13norm)* (n13norm/8);
         p1=m[3]+(n13/n13norm)* (n13norm/8);
         cv::line(thresImage,p0,p1,Scalar::all(255),1);
-
     }
     thresImage=255-thresImage;
     src_gray=255-src_gray;
@@ -778,13 +777,28 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
     allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
 
+
+    //DEBUG
+
+    cv::Mat imcopy;
+    cv::cvtColor(thresImage,imcopy,cv::COLOR_GRAY2BGR);
+    //draw the markers for visualization
+    for(auto m:allMarkers){
+        for(int c=0;c<4;c++){
+            cv::line(imcopy,m[c],m[(c+1)%4],Scalar(0,255,125),1);
+        }
+    }
+    cv::imshow("markers",imcopy);
+    //DEBUG
+
+
+
     if(allMarkers.empty())return;
 
-    //now, lets unify the corners for subpixel analysis
+    //now, lets focus on the global corners. Unify the corners for subpixel analysis
     //first, obtain the average position for each global corner id found
     std::map<int,std::pair<cv::Point2f,int> > global_corners;
     for(auto m:allMarkers){
-              std::cout<<"marker="<<m.id<<" "<<      m[0]<<" "<<m[1]<<" "<<m[2]<<" "<<m[3]<<std::endl;
         for(int c=0;c<4;c++){
             int gid=getGlobalCornerID(m.id,c);
             if (global_corners.find(gid)==global_corners.end())
@@ -797,17 +811,11 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
         }
     }
     //now, average
-    cv::Mat ii=image.getMat();
-    for(auto &gc:global_corners){
+    for(auto &gc:global_corners)
         gc.second.first=gc.second.first / float(gc.second.second);
-         std::cout<<"marker="<<gc.first<<" "<<      gc.second.first<<std::endl;
-
-    }
-
-    //    std::cout<<std::flush;
 
     //////  subpixel corner refinement
-    // compute the window size for the subpixel refinement
+    // compute the window size for the subpixel refinement based on the size of the markers. Bigger makers, bigger search zone
     double avrgLen=0;
     for(auto m:allMarkers){
         for(int i=0;i<4;i++){
@@ -815,7 +823,8 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
         }
     }
     avrgLen/=4*allMarkers.size();
-    int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
+    //here is the formula to compute the half window size
+    int halfwsize= std::min(int(3* std::max(1.f,float(avrgLen)/float(34) )),9);
 
     //add the global corners to a single vector
     std::vector<cv::Point2f> Corners;
@@ -842,17 +851,26 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     }
 
 
+    //copy results to output arrays
+    std::vector<int> gidv;
+    std::vector<cv::Point2f> gcorners;
+    for(auto [gid,corner_c]:global_corners){
+        gidv.push_back(gid);
+        gcorners.push_back(corner_c.first);
+    }
+    charuconano::copyVector2Output(gidv,charucoIds);
+    charuconano::copyVector2Output(gcorners,charucoCorners);
 
+    //Markers
     // 2. Unpack results into OutputArrayOfArrays
-    copyVector2Output(allMarkers, imgPoints);
-
+    charuconano::copyVector2Output(allMarkers, markerCorners);
 
     // 3. Assign to output ids
-    std::vector<int> idsVec;
-    idsVec.reserve(allMarkers.size());
-    for (const auto& m : allMarkers) idsVec.push_back(m.id);
+    std::vector<int> marker_idsVec;
+    marker_idsVec.reserve(allMarkers.size());
+    for (const auto& m : allMarkers) marker_idsVec.push_back(m.id);
 
     // Allocate and copy IDs
-    markerIds.create((int)idsVec.size(), 1, CV_32SC1);
-    cv::Mat(idsVec).copyTo(markerIds);
+    markerIds.create((int)marker_idsVec.size(), 1, CV_32SC1);
+    cv::Mat(marker_idsVec).copyTo(markerIds);
 }

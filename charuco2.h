@@ -18,9 +18,14 @@ public:
 
 class     CharucoDetector2{
     CharucoBoard2 board;
+    cv::aruco::ArucoDetector Adetector;
 public:
     CharucoDetector2(const CharucoBoard2& board);
-    void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
+    //void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
+
+    void detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
+                     InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds);
+
 private:
     //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
     int getGlobalCornerID(int marker_id,int corner_id) const;
