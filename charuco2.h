@@ -6,11 +6,14 @@ class CharucoBoard2{
 public:
     cv::Size bSize={-1,-1};
     Dictionary  dictionary;
-
-
+    std::vector<int> ids;
     CharucoBoard2();
-    CharucoBoard2(cv::Size bSize, const Dictionary &dictionary);
+    CharucoBoard2(cv::Size bSize, const Dictionary &dictionary, InputArray ids = noArray());
     void generateImage(float markerSizePix, Mat& outImage) const;
+    //returns the row,col of a given marker id
+    std::pair<int,int> getIdPos(int id)const;
+    //returns the id at the row,col indicated
+    int getId(int row,int col)const;
 };
 
 class     CharucoDetector2{
@@ -19,7 +22,7 @@ public:
     CharucoDetector2(const CharucoBoard2& board);
     void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
 private:
-        //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
+    //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
     int getGlobalCornerID(int marker_id,int corner_id) const;
     //opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
     std::vector<std::pair<int,int>>  getMarkerCornersFromGlobalCornerID( int gid)const;

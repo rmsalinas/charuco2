@@ -577,11 +577,29 @@ cv::aruco::CharucoBoard2::CharucoBoard2()
 
 }
 
-cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize,   const  Dictionary  &dictionary)
+cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize,   const  Dictionary  &dictionary, InputArray ids)
 {
     this->bSize = bSize;
     this->dictionary = dictionary;
-
+    //set the ids
+    if(ids.empty()){
+        int markerId=0;
+        for(int y=0;y<bSize.height;y++){
+            for(int x= 0;x<bSize.width;x++,markerId++){
+                if(markerId>=dictionary.bytesList.rows){
+                    CV_Error(cv::Error::StsBadArg, "Number of markers exceeds the number of markers in the dictionary");
+                }
+                this->ids.push_back(markerId);
+            }
+        }
+    }
+    else{
+        Mat idsMat=ids.getMat();
+        if(idsMat.total()!=bSize.area() || idsMat.type()!=CV_32SC1){
+            CV_Error(cv::Error::StsBadArg, "Ids must be a vector of int with the same number of elements as the board size");
+        }
+        this->ids=std::vector<int>(idsMat.begin<int>(),idsMat.end<int>());
+    }
 }
 
 void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage) const
@@ -595,15 +613,15 @@ void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage)
     // For simplicity, we will just create a blank image and draw the markers at fixed positions.
     cv::Size imgSize(markerSizePix*bSize.width + markerSizePix , markerSizePix*bSize.height+markerSizePix);
 
-    int markerId=1;
+    int markerIdx=0;
     outImage = Mat::zeros(imgSize, CV_8UC1);
     outImage=255;
     int startLineColor = 0; // White color for the markers
     for(int y=0; y<bSize.height; y++){
         int curMarkerColor=startLineColor;
-        for(int x= 0; x<bSize.width; x++,markerId++){
+        for(int x= 0; x<bSize.width; x++,markerIdx++){
                 Mat markerImg;
-                dictionary.generateImageMarker(markerId, markerSizePix, markerImg);
+                dictionary.generateImageMarker(ids[markerIdx], markerSizePix, markerImg);
                 // Place the marker in the correct position
                 int posX = x * markerSizePix + markerSizePix/2;
                 int posY = y * markerSizePix + markerSizePix/2;
@@ -639,14 +657,84 @@ void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage)
         cv::rectangle(outImage,Rect(outImage.cols-markerSizePix/2,outImage.rows-markerSizePix/2,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
 }
 
+std::pair<int, int> cv::aruco::CharucoBoard2::getIdPos(int id) const
+{
+    auto it=std::find(ids.begin(),ids.end(),id);
+    if(it==ids.end()) return {-1,-1};
+    int idx=std::distance(ids.begin(),it);
+    int y=idx % bSize.width;
+    int x=idx / bSize.width;
+    return {x,y};
+}
+
+int cv::aruco::CharucoBoard2::getId(int row, int col) const
+{
+    if(row<0 || row>=bSize.height || col<0 || col>=bSize.width) return -1;
+    int idx=row*bSize.width+col;
+    return ids[idx];
+}
+
 cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &board)
 {
 this->board=board;
 
 }
+//given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
+
+int cv::aruco::CharucoDetector2::getGlobalCornerID(int marker_id, int corner_id) const
+{
+    //obtain the row, col of the marker_id
+    auto row_col=board.getIdPos(marker_id);
+    if(corner_id<=1){
+        return (board.bSize.width+1) *row_col.first +  row_col.second+  corner_id;
+    }
+    else if(corner_id==2){
+        return (board.bSize.width+1) *(row_col.first+1) +  row_col.second+ 1;
+    }
+    else  {
+        return (board.bSize.width+1) *(row_col.first+1) +  row_col.second;
+
+    }
+}
+//opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
+
+std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFromGlobalCornerID( int gid)const
+{
+    std::vector<std::pair<int,int>> result;
+    const int W = board.bSize.width;
+
+    // Decompose gid into (cr, cc) in the (H+1) x (W+1) corner grid.
+    // Inverse of  gid = (W+1) * cr + cc  used in getGlobalCornerID.
+    const int cr = gid / (W + 1);
+    const int cc = gid % (W + 1);
+
+    // Up to 4 markers share a global corner. Sort order: 0=TL, 1=TR, 2=BR, 3=BL.
+    // board.getId() returns -1 for out-of-range (row,col), so it doubles as a bounds check.
+    int id;
+
+    // Marker at (cr, cc) sees this point as its top-left (0)
+    id = board.getId(cr,     cc);
+    if (id != -1) result.emplace_back(id, 0);
+
+    // Marker at (cr, cc-1) sees this point as its top-right (1)
+    id = board.getId(cr,     cc - 1);
+    if (id != -1) result.emplace_back(id, 1);
+
+    // Marker at (cr-1, cc-1) sees this point as its bottom-right (2)
+    id = board.getId(cr - 1, cc - 1);
+    if (id != -1) result.emplace_back(id, 2);
+
+    // Marker at (cr-1, cc) sees this point as its bottom-left (3)
+    id = board.getId(cr - 1, cc);
+    if (id != -1) result.emplace_back(id, 3);
+
+    return result;
+}
+
+
 void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgPoints, OutputArray objPoints, OutputArray markerIds) const
 {
-     std::vector<charuconano::Marker>  markers_black,markers_white;
+    std::vector<charuconano::Marker>  markers_black,markers_white;
     cv::Mat src_gray;
     if(image.channels()==3)
         cvtColor(image, src_gray, cv::COLOR_BGR2GRAY);
@@ -679,8 +767,8 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
         p1=m[3]+(n13/n13norm)* (n13norm/8);
         cv::line(thresImage,p0,p1,Scalar::all(255),1);
 
-     }
-     thresImage=255-thresImage;
+    }
+    thresImage=255-thresImage;
     src_gray=255-src_gray;
     markers_white=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
 
@@ -696,7 +784,7 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     //first, obtain the average position for each global corner id found
     std::map<int,std::pair<cv::Point2f,int> > global_corners;
     for(auto m:allMarkers){
-//        std::cout<<"marker="<<m.id<<" "<<      m[0]<<" "<<m[1]<<" "<<m[2]<<" "<<m[3]<<std::endl;
+              std::cout<<"marker="<<m.id<<" "<<      m[0]<<" "<<m[1]<<" "<<m[2]<<" "<<m[3]<<std::endl;
         for(int c=0;c<4;c++){
             int gid=getGlobalCornerID(m.id,c);
             if (global_corners.find(gid)==global_corners.end())
@@ -712,46 +800,46 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     cv::Mat ii=image.getMat();
     for(auto &gc:global_corners){
         gc.second.first=gc.second.first / float(gc.second.second);
-       // std::cout<<"marker="<<gc.first<<" "<<      gc.second.first<<std::endl;
+         std::cout<<"marker="<<gc.first<<" "<<      gc.second.first<<std::endl;
 
     }
 
-//    std::cout<<std::flush;
+    //    std::cout<<std::flush;
 
     //////  subpixel corner refinement
     // compute the window size for the subpixel refinement
-        double avrgLen=0;
-        for(auto m:allMarkers){
-            for(int i=0;i<4;i++){
-                avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
+    double avrgLen=0;
+    for(auto m:allMarkers){
+        for(int i=0;i<4;i++){
+            avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
+        }
+    }
+    avrgLen/=4*allMarkers.size();
+    int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
+
+    //add the global corners to a single vector
+    std::vector<cv::Point2f> Corners;
+    for (const auto &m:global_corners)
+        Corners.push_back(m.second.first);
+    //refine the corners
+    cv::cornerSubPix(src_gray, Corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
+    // copy back to the global corners
+    int idex=0;
+    for(auto &gc:global_corners){
+        gc.second.first=Corners[idex++];
+    }
+
+    //now, assign the refined global corner positions back to the markers
+    for(auto [gid,corner_c]:global_corners){
+        //find in how many markers it is involved
+        for(auto [markerid,cornerid]:getMarkerCornersFromGlobalCornerID(gid)){
+            //see if the makrer id is detected
+            auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid](const charuconano::Marker &m){return m.id==markerid;});
+            if(it!=allMarkers.end()){
+                (*it)[cornerid]=corner_c.first;
             }
         }
-        avrgLen/=4*allMarkers.size();
-        int halfwsize= std::min(int(2* std::max(1.f,float(avrgLen)/float(34) )),9);
-
-        //add the global corners to a single vector
-        std::vector<cv::Point2f> Corners;
-        for (const auto &m:global_corners)
-            Corners.push_back(m.second.first);
-        //refine the corners
-        cv::cornerSubPix(src_gray, Corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
-        // copy back to the global corners
-        int idex=0;
-        for(auto &gc:global_corners){
-            gc.second.first=Corners[idex++];
-        }
-
-        //now, assign the refined global corner positions back to the markers
-        for(auto [gid,corner_c]:global_corners){
-            //find in how many markers it is involved
-            for(auto [markerid,cornerid]:getMarkerCornersFromGlobalCornerID(gid)){
-                //see if the makrer id is detected
-                auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid](const charuconano::Marker &m){return m.id==markerid;});
-                if(it!=allMarkers.end()){
-                    (*it)[cornerid]=corner_c.first;
-                }
-            }
-        }
+    }
 
 
 
@@ -768,61 +856,3 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray imgP
     markerIds.create((int)idsVec.size(), 1, CV_32SC1);
     cv::Mat(idsVec).copyTo(markerIds);
 }
-
-//given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
-
-int cv::aruco::CharucoDetector2::getGlobalCornerID(int marker_id, int corner_id) const
-{
-    //obtain the row, col of the marker_id
-    int row=(marker_id-1) / board.bSize.width;
-    int col=(marker_id-1) % board.bSize.width;
-    if(corner_id<=1){
-        return (board.bSize.width+1) *row +  col+  corner_id;
-    }
-    else if(corner_id==2){
-        return (board.bSize.width+1) *(row+1) +  col + 1;
-    }
-    else  {
-        return (board.bSize.width+1) *(row+1) +  col ;
-
-    }
-}
-
-std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFromGlobalCornerID( int gid)const
-{
-    std::vector<std::pair<int,int>> result; // pairs of (marker_id, corner_id)
-
-    int w = board.bSize.width;   // markers per row
-    int h = board.bSize.height;  // markers per col
-
-    // convert gid back to corner-grid coordinates
-    int cr = gid / (w + 1);   // corner row
-    int cc = gid % (w + 1);   // corner col
-
-    // This corner is the TL (corner 0) of marker at (row=cr, col=cc)
-    if (cr < h && cc < w) {
-        int marker_id = cr * w + cc + 1;
-        result.emplace_back(marker_id, 0);
-    }
-
-    // TR (corner 1) of marker at (row=cr, col=cc-1)
-    if (cr < h && cc - 1 >= 0) {
-        int marker_id = cr * w + (cc - 1) + 1;
-        result.emplace_back(marker_id, 1);
-    }
-
-    // BR (corner 2) of marker at (row=cr-1, col=cc-1)
-    if (cr - 1 >= 0 && cc - 1 >= 0) {
-        int marker_id = (cr - 1) * w + (cc - 1) + 1;
-        result.emplace_back(marker_id, 2);
-    }
-
-    // BL (corner 3) of marker at (row=cr-1, col=cc)
-    if (cr - 1 >= 0 && cc < w) {
-        int marker_id = (cr - 1) * w + cc + 1;
-        result.emplace_back(marker_id, 3);
-    }
-
-    return result;
-}
-
