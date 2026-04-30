@@ -31,6 +31,7 @@ private:
     int getGlobalCornerID(int marker_id,int corner_id) const;
     //opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
     std::vector<std::pair<int,int>>  getMarkerCornersFromGlobalCornerID( int gid)const;
+
 };
 
 }

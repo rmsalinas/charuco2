@@ -3,6 +3,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/highgui.hpp>
 #include <map>
+#include <queue>
 namespace    charuconano{
 /**
  * @brief The Marker class is a marker detectable by the library
@@ -542,6 +543,174 @@ std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Ma
 
 
 }
+std::vector<std::vector<int>> getConnectedComponents(cv::Mat graph_8uc1) {
+    int n = graph_8uc1.rows;
+    std::vector<bool> visited(n, false);
+    std::vector<std::vector<int>> components;
+
+    // Ensure the matrix is square
+    if (n != graph_8uc1.cols) {
+        return components;
+    }
+
+    for (int i = 0; i < n; ++i) {
+        if (!visited[i]) {
+            // Start of a new connected component
+            std::vector<int> currentComponent;
+            std::queue<int> q;
+
+            q.push(i);
+            visited[i] = true;
+
+            while (!q.empty()) {
+                int u = q.front();
+                q.pop();
+                currentComponent.push_back(u);
+
+                // Check the row in the adjacency matrix for neighbors
+                // Using ptr<uchar> for faster row access than .at<uchar>
+                const uchar* rowPtr = graph_8uc1.ptr<uchar>(u);
+                for (int v = 0; v < n; ++v) {
+                    if (rowPtr[v] != 0 && !visited[v]) {
+                        visited[v] = true;
+                        q.push(v);
+                    }
+                }
+            }
+            components.push_back(currentComponent);
+        }
+    }
+
+    return components;
+}
+
+std::shared_ptr<cv::flann::Index> buildFlannIndex(const std::vector<Marker> &markers) {
+    //create a vector with all corners
+    std::vector<cv::Point2f> corners;
+    corners.reserve(markers.size()*4);
+    for(const auto &m:markers){
+        for(const auto &c:m){
+            corners.push_back(c);
+        }
+    }
+    //now, create a flann index with these corners
+    cv::flann::KDTreeIndexParams indexParams(1);
+    cv::Mat data = cv::Mat(corners).reshape(1, static_cast<int>(corners.size()));
+    return std::make_shared<cv::flann::Index>(data, indexParams);
+}
+//returns a set of markers that are connected, i.e. that have at least one corner closer than a threshold.
+std::vector<std::vector<Marker>> connectedComponents(const std::vector<Marker> &markers){
+    //create a vector with all corners
+    //now, create a flann index with these corners
+    auto flannIndex=buildFlannIndex(markers);
+
+    cv::Mat  graph(markers.size(), markers.size(), CV_8UC1, cv::Scalar(0));
+
+    //now, for each corner, find the neighbors closer than a threshold
+    const float threshold=10.0f;
+    for(auto corners:markers){
+        for(int i=0;i<4;i++){
+            std::vector<int> indices;
+            std::vector<float> dists;
+            cv::Mat query = (cv::Mat_<float>(1, 2) << corners[i].x, corners[i].y); // Single 2D query point
+            int n=flannIndex->radiusSearch(query, indices, dists, threshold*threshold, corners.size());
+            for(int x=0;x<n;x++){
+                int idx=indices[x];
+                graph.at<uchar>(i/4,idx/4)=1;
+                graph.at<uchar>(idx/4,i/4)=1;
+            }
+        }
+    }
+
+    //obtain the different connected components available
+    auto ccomps=getConnectedComponents(graph);
+
+
+    //now, for each component, obtain the corresponding markers
+    std::vector<std::vector<Marker>> res;
+    for(const auto &comp:ccomps){
+        res.push_back({});
+        for(auto idx:comp){
+            res.back().push_back(markers[idx]);
+        }
+    }
+    return res;
+}
+
+
+std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Mat &src_gray){
+    std::vector<charuconano::Marker>  markers_black,markers_white;
+    cv::Mat thresImage;
+
+    //BLACK MARKERS
+    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
+    thresImage=thresImage-src_gray;
+    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
+    markers_black=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+
+    //because we have shrink the borders for black markers, we will expand the corners a bit from the center
+    for(auto & marker:markers_black){
+        std::vector<cv::Point2f> newPoints;
+        for(int i=0;i<4;i++){
+            int idx0=i;
+            int idx1=(i+2) % 4;
+            auto dif=marker[idx0]-marker[idx1];
+            auto norm=cv::norm(dif);
+            auto p= marker[idx1]+  ((dif)/norm)*(norm+3   );
+            newPoints.push_back(p);
+        }
+        //replace the points by the new ones
+        for(int i=0;i<4;i++){
+            marker[i]=newPoints[i];
+        }
+    }
+
+    ///WHITE MARKERS
+    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(15,15),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
+    thresImage=thresImage-src_gray;
+    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
+
+
+
+    //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
+    for(auto m:markers_black){
+        auto n02=m[2]-m[0];
+        auto n02norm=cv::norm(n02);
+        auto p0=m[0]-(n02/n02norm)* (n02norm/8);
+        auto p1=m[0]+(n02/n02norm)* (n02norm/8);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        p0=m[2]-(n02/n02norm)* (n02norm/8);
+        p1=m[2]+(n02/n02norm)* (n02norm/8);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+
+        //same for the other diagonal
+        auto n13=m[3]-m[1];
+        auto n13norm=cv::norm(n13);
+        p0=m[1]-(n13/n13norm)* (n13norm/8);
+        p1=m[1]+(n13/n13norm)* (n13norm/8);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        p0=m[3]-(n13/n13norm)* (n13norm/8);
+        p1=m[3]+(n13/n13norm)* (n13norm/8);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+    }
+    thresImage=255-thresImage;
+    src_gray=255-src_gray;
+    markers_white=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+
+    // Combine results from both
+    std::vector<charuconano::Marker> allMarkers;
+    allMarkers.reserve(markers_black.size() + markers_white.size());
+    allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
+    allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
+    //remove markers not belonging to the list of ids of the board
+    allMarkers.erase(std::remove_if(allMarkers.begin(), allMarkers.end(),
+                                    [&board](const charuconano::Marker &m) {
+                                        return std::find(board.ids.begin(), board.ids.end(), m.id) == board.ids.end();
+                                    }), allMarkers.end());
+
+    return allMarkers;
+}
+
 }
 
 
@@ -710,92 +879,70 @@ std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFro
 void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
                                               InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds)
 {
-    std::vector<charuconano::Marker>  markers_black,markers_white;
     cv::Mat src_gray;
+    //obtain the gray image
     if(image.channels()==3)
         cvtColor(image, src_gray, cv::COLOR_BGR2GRAY);
     else src_gray=image.getMat();
-    cv::Mat thresImage;
 
-
-    //BLACK MARKERS
-    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
-    thresImage=thresImage-src_gray;
-    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
-    markers_black=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
-
-    //because we have shrink the borders for black markers, we will expand the corners a bit from the center
-    for(auto & marker:markers_black){
-        std::vector<cv::Point2f> newPoints;
-        for(int i=0;i<4;i++){
-            int idx0=i;
-            int idx1=(i+2) % 4;
-            auto dif=marker[idx0]-marker[idx1];
-            auto norm=cv::norm(dif);
-            auto p= marker[idx1]+  ((dif)/norm)*(norm+3   );
-            newPoints.push_back(p);
-        }
-        //replace the points by the new ones
-        for(int i=0;i<4;i++){
-            marker[i]=newPoints[i];
-        }
-    }
-
-    ///WHITE MARKERS
-    cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(15,15),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
-    thresImage=thresImage-src_gray;
-    cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
-
-
-
-    //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
-    for(auto m:markers_black){
-        auto n02=m[2]-m[0];
-        auto n02norm=cv::norm(n02);
-        auto p0=m[0]-(n02/n02norm)* (n02norm/8);
-        auto p1=m[0]+(n02/n02norm)* (n02norm/8);
-        cv::line(thresImage,p0,p1,Scalar::all(255),1);
-        p0=m[2]-(n02/n02norm)* (n02norm/8);
-        p1=m[2]+(n02/n02norm)* (n02norm/8);
-        cv::line(thresImage,p0,p1,Scalar::all(255),1);
-
-        //same for the other diagonal
-        auto n13=m[3]-m[1];
-        auto n13norm=cv::norm(n13);
-        p0=m[1]-(n13/n13norm)* (n13norm/8);
-        p1=m[1]+(n13/n13norm)* (n13norm/8);
-        cv::line(thresImage,p0,p1,Scalar::all(255),1);
-        p0=m[3]-(n13/n13norm)* (n13norm/8);
-        p1=m[3]+(n13/n13norm)* (n13norm/8);
-        cv::line(thresImage,p0,p1,Scalar::all(255),1);
-    }
-    thresImage=255-thresImage;
-    src_gray=255-src_gray;
-    markers_white=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
-
-    // Combine results from both
-    std::vector<charuconano::Marker> allMarkers;
-    allMarkers.reserve(markers_black.size() + markers_white.size());
-    allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
-    allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
-
-
-    //DEBUG
-
-    cv::Mat imcopy;
-    cv::cvtColor(thresImage,imcopy,cv::COLOR_GRAY2BGR);
-    //draw the markers for visualization
-    for(auto m:allMarkers){
-        for(int c=0;c<4;c++){
-            cv::line(imcopy,m[c],m[(c+1)%4],Scalar(0,255,125),1);
-        }
-    }
-    cv::imshow("markers",imcopy);
-    //DEBUG
-
-
+    //detect all markers
+    auto allMarkers=charuconano::detectBWMarkers(board, src_gray);
 
     if(allMarkers.empty())return;
+    //obtain the connected components
+    std::vector<std::vector<charuconano::Marker> > connected_markers=charuconano::connectedComponents(allMarkers);
+
+    //lets detect possible inconsistencies, i.e., markers in the wrong order, possibly belonging to another board configuration
+    std::vector<std::vector<charuconano::Marker> > consistent_connected_markers;
+    for(auto &comp:connected_markers){
+        int threshold=10;
+        auto findex=charuconano::buildFlannIndex(comp);
+        bool is_consistent=true;
+        //for each corner, of each marker we will analyze its nearst neighbor. If is really connected, we will check if
+        //the connection is consistent
+        for(auto marker:comp){
+            std::vector<int> indices;
+            std::vector<float> dists;
+             for(int c=0;c<4;c++){
+                cv::Mat query = (cv::Mat_<float>(1, 2) << marker[c].x, marker[c].y); // Single 2D query point
+                int nn=findex->radiusSearch(query, indices, dists, threshold*threshold, marker.size());
+                for(int ix=0;ix<nn;ix++){
+                    int idx=indices[ix];
+                     if(comp[idx/4].id==marker.id) continue;//same marker
+                    //check if the connection is consistent, i.e., if the global corner ids are the same
+                    int gid1=getGlobalCornerID(marker.id,c);
+                    int gid2=getGlobalCornerID(comp[idx/4].id,idx%4);
+                    if(gid1!=gid2){
+                        std::cout<<"Marker "<<marker.id<<" corner "<<c<<" is connected to marker "<<comp[idx/4].id<<" corner "<<idx%4<<" with distance "<<std::sqrt(dists[0])<<" and global corner ids "<<gid1<<" and "<<gid2<<std::endl;
+                        is_consistent=false;
+                    }
+                }
+            }
+            if(!is_consistent) break;
+        }
+        if(is_consistent)
+            consistent_connected_markers.push_back(comp);
+    }
+
+    if(consistent_connected_markers.empty())return;
+
+    //select the one with more markers belonging to the board (at least 2)
+    std::vector<charuconano::Marker> connected_markers_filtered;
+     for(const auto &comp:consistent_connected_markers){
+        int validMarkers=0;
+        for(const auto &m:comp){
+            if(std::find(board.ids.begin(),board.ids.end(),m.id)!=board.ids.end()){
+                validMarkers++;
+            }
+        }
+        if(validMarkers>connected_markers_filtered.size() && validMarkers>2){
+            connected_markers_filtered=comp;
+        }
+     }
+
+
+     if(connected_markers_filtered.empty()) return;
+     allMarkers=connected_markers_filtered;
 
     //now, lets focus on the global corners. Unify the corners for subpixel analysis
     //first, obtain the average position for each global corner id found

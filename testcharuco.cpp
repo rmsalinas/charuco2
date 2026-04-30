@@ -26,7 +26,7 @@ int main() {
     cv::aruco::CharucoDetector2 detector(board);
 
 
-    if(1){
+    if(0){
         cv::Mat outImg;
         cv::aruco::CharucoBoard2 board(cv::Size(2, 2),  dictionary);
         board.generateImage(200,outImg);
