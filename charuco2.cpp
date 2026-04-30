@@ -578,13 +578,14 @@ cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize,   const  Dictionary  &di
 void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage) const
 {
 
+    int border=markerSizePix/4;
     int nmarkers=bSize.area();
     //check no more than allowed by the dictionary
     if(nmarkers > dictionary.bytesList.rows){
         CV_Error(cv::Error::StsBadArg, "Number of markers exceeds the number of markers in the dictionary");
     }
     // For simplicity, we will just create a blank image and draw the markers at fixed positions.
-    cv::Size imgSize(markerSizePix*bSize.width + markerSizePix , markerSizePix*bSize.height+markerSizePix);
+    cv::Size imgSize(markerSizePix*bSize.width + 2*border , markerSizePix*bSize.height+2*border);
 
     int markerIdx=0;
     outImage = Mat::zeros(imgSize, CV_8UC1);
@@ -593,42 +594,43 @@ void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage)
     for(int y=0; y<bSize.height; y++){
         int curMarkerColor=startLineColor;
         for(int x= 0; x<bSize.width; x++,markerIdx++){
-                Mat markerImg;
-                dictionary.generateImageMarker(ids[markerIdx], markerSizePix, markerImg);
-                // Place the marker in the correct position
-                int posX = x * markerSizePix + markerSizePix/2;
-                int posY = y * markerSizePix + markerSizePix/2;
-                if(curMarkerColor)
-                    markerImg=255-markerImg;
-                markerImg.copyTo(outImage(Rect(posX, posY, markerSizePix, markerSizePix)));
-                curMarkerColor= curMarkerColor==1?0:1; // Alternate marker colors
+            Mat markerImg;
+            dictionary.generateImageMarker(ids[markerIdx], markerSizePix, markerImg);
+            // Place the marker in the correct position
+            int posX = x * markerSizePix + border;
+            int posY = y * markerSizePix + border;
+            if(curMarkerColor)
+                markerImg=255-markerImg;
+            markerImg.copyTo(outImage(Rect(posX, posY, markerSizePix, markerSizePix)));
+            curMarkerColor= curMarkerColor==1?0:1; // Alternate marker colors
 
-            }
+        }
         startLineColor=startLineColor==1?0:1; // Alternate marker colors
-        }
+    }
 
-        //now, draw blocks closing white markers in borders, first top and bottom rows, then left and right columns
-        for(int x=1;x<bSize.width;x+=2){
-            cv::rectangle(outImage,Rect(markerSizePix/2+x*markerSizePix,0,markerSizePix,markerSizePix/2),Scalar::all(0),FILLED);
-        }
-        for(int x=bSize.height%2;x<bSize.width;x+=2){
-            cv::rectangle(outImage,Rect(markerSizePix/2+x*markerSizePix,markerSizePix/2+markerSizePix*bSize.height ,markerSizePix,markerSizePix/2),Scalar::all(0),FILLED);
+    //now, draw blocks closing white markers in borders, first top and bottom rows, then left and right columns
+    for(int x=1;x<bSize.width;x+=2){
+        cv::rectangle(outImage,Rect(border+x*markerSizePix,0,markerSizePix,border),Scalar::all(0),FILLED);
+    }
+    for(int x=bSize.height%2;x<bSize.width;x+=2){
+        cv::rectangle(outImage,Rect(border+x*markerSizePix,border+markerSizePix*bSize.height ,markerSizePix,border),Scalar::all(0),FILLED);
 
-        }
-        //now the left and right columns
-        for(int y=1;y<bSize.height;y+=2){
-            cv::rectangle(outImage,Rect(0,markerSizePix/2+y*markerSizePix,markerSizePix/2,markerSizePix),Scalar::all(0),FILLED);
-        }
-        for(int y=bSize.width%2;y<bSize.height;y+=2){
-        cv::rectangle(outImage,Rect(markerSizePix/2+markerSizePix*bSize.width,markerSizePix/2+y*markerSizePix,markerSizePix/2,markerSizePix),Scalar::all(0),FILLED);
-        }
+    }
+    //now the left and right columns
+    for(int y=1;y<bSize.height;y+=2){
+        cv::rectangle(outImage,Rect(0,border+y*markerSizePix,border,markerSizePix),Scalar::all(0),FILLED);
+    }
+    for(int y=bSize.width%2;y<bSize.height;y+=2){
+        cv::rectangle(outImage,Rect(border+markerSizePix*bSize.width,border+y*markerSizePix,border,markerSizePix),Scalar::all(0),FILLED);
+    }
 
-        //now, the 4 corners if needed
-        cv::rectangle(outImage,Rect(0,0,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
-        cv::rectangle(outImage,Rect(outImage.cols-markerSizePix/2,0,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
-        cv::rectangle(outImage,Rect(0,outImage.rows-markerSizePix/2,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
-        cv::rectangle(outImage,Rect(outImage.cols-markerSizePix/2,outImage.rows-markerSizePix/2,markerSizePix/2,markerSizePix/2),Scalar::all(0),FILLED);
+    //now, the 4 corners if needed
+    cv::rectangle(outImage,Rect(0,0,border,border),Scalar::all(0),FILLED);
+    cv::rectangle(outImage,Rect(outImage.cols-border,0,border,border),Scalar::all(0),FILLED);
+    cv::rectangle(outImage,Rect(0,outImage.rows-border,border,border),Scalar::all(0),FILLED);
+    cv::rectangle(outImage,Rect(outImage.cols-border,outImage.rows-border,border,border),Scalar::all(0),FILLED);
 }
+
 
 std::pair<int, int> cv::aruco::CharucoBoard2::getIdPos(int id) const
 {
