@@ -25,7 +25,8 @@ public:
 
     void detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
                      InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds);
-
+    void detectDiamonds(InputArray image, OutputArrayOfArrays _diamondCorners, OutputArray _diamondIds,
+                        InputOutputArrayOfArrays inMarkerCorners, InputOutputArray inMarkerIds) ;
 private:
     //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
     int getGlobalCornerID(int marker_id,int corner_id) const;

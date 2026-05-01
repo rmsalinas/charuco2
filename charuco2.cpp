@@ -538,7 +538,6 @@ std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Ma
     charuconano::DetectorParameters params;
     //params.expansionDueToErosion=erosionIt;
     params.dicts.push_back(dict);
-    cv::imshow("thes",thresImage);
     return charuconano::MarkerDetector::detect(src_gray,params,nullptr,thresImage);
 
 
@@ -608,20 +607,21 @@ std::vector<std::vector<Marker>> connectedComponents(const std::vector<Marker> &
 
     //now, for each corner, find the neighbors closer than a threshold
     const float threshold=10.0f;
-    for(auto corners:markers){
+    for(int m=0;m<markers.size();m++){
         for(int i=0;i<4;i++){
             std::vector<int> indices;
             std::vector<float> dists;
-            cv::Mat query = (cv::Mat_<float>(1, 2) << corners[i].x, corners[i].y); // Single 2D query point
-            int n=flannIndex->radiusSearch(query, indices, dists, threshold*threshold, corners.size());
+            cv::Mat query = (cv::Mat_<float>(1, 2) << markers[m][i].x, markers[m][i].y); // Single 2D query point
+            int n=flannIndex->radiusSearch(query, indices, dists, threshold*threshold, 4*markers.size());
             for(int x=0;x<n;x++){
                 int idx=indices[x];
-                graph.at<uchar>(i/4,idx/4)=1;
-                graph.at<uchar>(idx/4,i/4)=1;
+                graph.at<uchar>(m,idx/4)=1;
+                graph.at<uchar>(idx/4,m)=1;
             }
         }
     }
 
+    //std::cout<<"Graph:\n"<<graph<<std::endl;
     //obtain the different connected components available
     auto ccomps=getConnectedComponents(graph);
 
@@ -672,6 +672,7 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
 
 
 
+
     //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
     for(auto m:markers_black){
         auto n02=m[2]-m[0];
@@ -702,13 +703,7 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
     allMarkers.reserve(markers_black.size() + markers_white.size());
     allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
     allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
-    //remove markers not belonging to the list of ids of the board
-    allMarkers.erase(std::remove_if(allMarkers.begin(), allMarkers.end(),
-                                    [&board](const charuconano::Marker &m) {
-                                        return std::find(board.ids.begin(), board.ids.end(), m.id) == board.ids.end();
-                                    }), allMarkers.end());
-
-    return allMarkers;
+      return allMarkers;
 }
 
 }
@@ -887,6 +882,12 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
 
     //detect all markers
     auto allMarkers=charuconano::detectBWMarkers(board, src_gray);
+    //remove markers not belonging to the list of ids of the board
+    allMarkers.erase(std::remove_if(allMarkers.begin(), allMarkers.end(),
+                                    [this](const charuconano::Marker &m) {
+                                        return std::find(board.ids.begin(), board.ids.end(), m.id) == board.ids.end();
+                                    }), allMarkers.end());
+
 
     if(allMarkers.empty())return;
     //obtain the connected components
@@ -1022,4 +1023,81 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
     // Allocate and copy IDs
     markerIds.create((int)marker_idsVec.size(), 1, CV_32SC1);
     cv::Mat(marker_idsVec).copyTo(markerIds);
+}
+void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::OutputArrayOfArrays _diamondCorners, cv::OutputArray _diamondIds,
+                                      cv::InputOutputArrayOfArrays inMarkerCorners, cv::InputOutputArray inMarkerIds)    {
+
+    cv::Mat src_gray;
+    //obtain the gray image
+    if(image.channels()==3)
+        cvtColor(image, src_gray, cv::COLOR_BGR2GRAY);
+    else src_gray=image.getMat();
+
+    //detect all markers
+    auto allMarkers=charuconano::detectBWMarkers(board, src_gray);
+
+    if(allMarkers.empty())return;
+    //obtain the connected components
+    std::vector<std::vector<charuconano::Marker> > connected_markers=charuconano::connectedComponents(allMarkers);
+
+    //discard these that have more or less than 4 elements
+
+    std::vector<std::pair<Vec4i,  std::vector<charuconano::Marker> > >diammons_components;
+    int threshold=10*10;
+    std::vector<int> indices;
+    std::vector<float> dists;
+    cv::Mat query(1,2,CV_32F);
+    for(const auto &comp:connected_markers){
+        if(comp.size()!=4) continue;
+        //make sure they   share 3 corners
+        auto flannIndex=charuconano::buildFlannIndex(comp);
+        int totalSharedCorners=0,cornerWithMostSharedCorners=-1;
+        std::pair<int,int> centralCorner;//this is the central poisition, that let us know the order of the markers in the diamond
+        for(int m=0;m<comp.size();m++){
+            auto &marker=comp[m];
+             for(int c=0;c<4;c++){
+                 query.ptr<float>(0)[0]=marker[c].x;
+                 query.ptr<float>(0)[1]=marker[c].y;
+                 int nn=flannIndex->radiusSearch(query, indices, dists, threshold, 4);
+               //  std::cout<<"nn="<<nn<<" for marker "<<marker.id<<" corner "<<c<<std::endl;
+                 totalSharedCorners+=nn-1;
+                 if( nn>cornerWithMostSharedCorners)
+                 {
+                     cornerWithMostSharedCorners=nn;
+                     centralCorner={m,c};
+                 }
+            }
+        }
+        // std::cout<<"Component with markers "<<comp[0].id<<","<<comp[1].id<<","<<comp[2].id<<","<<comp[3].id<<" has "<<totalSharedCorners<<" shared corners"<<std::endl;
+        // std::cout<<"Central corner is marker "<<centralCorner.first<<" corner "<<centralCorner.second<<" with "<<cornerWithMostSharedCorners<<" shared corners"<<std::endl;
+        if(totalSharedCorners!=20) continue;
+
+        //find the diamon id eximiing the poition of the central corner, which is the one with more shared corners.
+        Vec4i diamondIds;
+        query.ptr<float>(0)[0]=comp[centralCorner.first][centralCorner.second].x;
+        query.ptr<float>(0)[1]=comp[centralCorner.first][centralCorner.second].y;
+        int nn=flannIndex->radiusSearch(query, indices, dists, threshold, 4);
+        for(int i=0;i<nn;i++){
+
+            int markerIdx=indices[i]/4;
+            int cornerIdx=indices[i]%4;
+
+            int idIndex;
+            if( cornerIdx==2) idIndex=0;
+            else if(cornerIdx==3) idIndex=1;
+            else if(cornerIdx==1) idIndex=2;
+            else idIndex=3;
+            diamondIds[idIndex]=comp[markerIdx].id;
+
+        }
+       std::cout<<"ID="<<diamondIds<<std::endl;
+
+
+        diammons_components.push_back({diamondIds,comp});
+    }
+     if(diammons_components.empty())return;
+
+
+
+
 }
