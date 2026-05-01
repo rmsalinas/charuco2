@@ -4,6 +4,57 @@
 #include "charuco2.h"
 using namespace cv;
 
+void drawDetectedDiamonds(InputOutputArray _image, InputArrayOfArrays _corners, InputArray _ids=cv::noArray(), Scalar borderColor = cv::Scalar(0, 0, 255)) {
+    CV_Assert(_image.getMat().total() != 0 &&
+              (_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
+    CV_Assert((_corners.total() == _ids.total()) || _ids.total() == 0);
+
+    // calculate colors
+    Scalar textColor, cornerColor;
+    textColor = cornerColor = borderColor;
+    swap(textColor.val[0], textColor.val[1]);     // text color just sawp G and R
+    swap(cornerColor.val[1], cornerColor.val[2]); // corner color just sawp G and B
+
+    int nMarkers = (int)_corners.total();
+    for(int i = 0; i < nMarkers; i++) {
+        Mat currentMarker = _corners.getMat(i);
+        CV_Assert( (currentMarker.total() == 4 || currentMarker.total() == 9 ) && currentMarker.channels() == 2);
+        if (currentMarker.type() != CV_32SC2)
+            currentMarker.convertTo(currentMarker, CV_32SC2);
+
+        // draw marker sides
+        if(currentMarker.total() == 4){
+            for(int j = 0; j < currentMarker.total(); j++) {
+                Point p0, p1;
+                p0 = currentMarker.at<Point>(j);
+                p1 = currentMarker.at<Point>((j + 1) % currentMarker.total());
+                line(_image, p0, p1, borderColor, 1);
+            }
+        }
+        else{//9 corners, draw the inner square
+            line(_image, currentMarker.at<Point>(0), currentMarker.at<Point>(2), borderColor, 1);
+            line(_image, currentMarker.at<Point>(2), currentMarker.at<Point>(8), borderColor, 1);
+            line(_image, currentMarker.at<Point>(8), currentMarker.at<Point>(6), borderColor, 1);
+            line(_image, currentMarker.at<Point>(6), currentMarker.at<Point>(0), borderColor, 1);
+        }
+
+        // draw first corner mark
+        rectangle(_image, currentMarker.at<Point>(0) - Point(3, 3),
+                  currentMarker.at<Point>(0) + Point(3, 3), cornerColor, 1, LINE_AA);
+
+        // draw id composed by four numbers
+        if(_ids.total() != 0) {
+            Point cent(0, 0);
+            for(int p = 0; p < currentMarker.total(); p++)
+                cent += currentMarker.at<Point>(p);
+            cent = cent / float(currentMarker.total());
+            std::stringstream s;
+            s << "id=" << _ids.getMat().at< Vec4i >(i);
+            putText(_image, s.str(), cent, FONT_HERSHEY_SIMPLEX, 0.5, textColor, 2);
+        }
+    }
+}
+
 int main() {
     std::cout << "OpenCV Version: " << CV_VERSION << std::endl;
 
@@ -103,7 +154,7 @@ int main() {
         Mat output;
         cvtColor(canvas, output, COLOR_GRAY2BGR);
         aruco::drawDetectedMarkers(output, markerCorners, markerIds);
-        aruco::drawDetectedDiamonds(output, diamondCorners, diamondIds);
+        drawDetectedDiamonds(output, diamondCorners, diamondIds);
 
         // 3x3 board => 4 esquinas internas con ids {0,1,2,3}.
         const std::vector<int> charucoIds = {0, 1, 2, 3};
@@ -161,22 +212,32 @@ int main() {
         cv::Mat canvas( outImg.rows, outImg.cols*2,CV_8UC1);
         outImg.copyTo(canvas(cv::Rect(0,0,outImg.cols,outImg.rows)));
         outImg2.copyTo(canvas(cv::Rect(outImg.cols,0,outImg2.cols,outImg2.rows)));
+        cv::imshow("board",canvas);  while(cv::waitKey(0)!=27) ;
 
 
-        cv::imshow("board",canvas);
-        while(cv::waitKey(0)!=27) ;
         std::vector<int> markerIds;
-        std::vector<std::vector<cv::Point2f>> markerCorners;
-        std::vector<cv::Point2f> diamonsCorners;
+        std::vector<std::vector<Point2f>> diamondCorners, markerCorners;
+
         std::vector<cv::Point3f> objPoints;
-        std::vector<int> diamonsIds;
-        detector.detectDiamonds(canvas, diamonsCorners, diamonsIds,  markerCorners, markerIds);
-        while (cv::waitKey(0) != 27) ;
+        std::vector<Vec4i> diamonsIds;
+        detector.detectDiamonds(canvas, diamondCorners, diamonsIds,  markerCorners, markerIds);
+
+        for(auto dd:diamondCorners){
+            std::cout<<"diamond corners "<<dd.size()<<"\n";
+            for(auto p:dd)
+                std::cout<<"  "<<p<<"\n";
+        }
+        cv::cvtColor(canvas,canvas,cv::COLOR_GRAY2BGR);
+        aruco::drawDetectedMarkers(canvas, markerCorners, markerIds);
+        drawDetectedDiamonds(canvas, diamondCorners, diamonsIds);
+
+
+        cv::imshow("board",canvas);  while(cv::waitKey(0)!=27) ;
 
         exit(0);
     }
 
-    if(0){
+    if(1){
         cv::Mat outImg;
         board.generateImage(200,outImg);
         cv::imshow("board",outImg);
@@ -218,6 +279,10 @@ int main() {
         detector.detectBoard(image, charucoCorners, charucoIds,  markerCorners, markerIds);
         //draw markers
         cv::aruco::drawDetectedMarkers(image, markerCorners, markerIds);
+        for(auto m:markerCorners)
+            for(auto p:m)
+                std::cout<<"  "<<p<<"\n";
+
         cv::imshow("Detected Markers", image);
         cv::Mat im2=image.clone();
         cv::aruco::drawDetectedCornersCharuco(im2,charucoCorners, charucoIds);
