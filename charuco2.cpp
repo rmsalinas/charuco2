@@ -547,20 +547,7 @@ void copyVector2Output(std::vector<std::vector<cv::Point2f> > &vec, cv::OutputAr
                  "Only Mat vector, UMat vector, and vector<vector> OutputArrays are currently supported.");
     }
 }
-void copyVector2Output(const std::vector<int> &v, cv::OutputArray out) {
-    if (out.needed()) {
-        // cv::Mat(v) creates a matrix header pointing to the vector's data (no deep copy).
-        // copyTo(out) performs the actual deep copy into the output array.
-        cv::Mat(v).copyTo(out);
-    }
-}
 
-// Copies a vector of Point2f to an OutputArray
-void copyVector2Output(const std::vector<cv::Point2f> &v, cv::OutputArray out) {
-    if (out.needed()) {
-        cv::Mat(v).copyTo(out);
-    }
-}
 std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Mat & thresImage,   int erosionIt)  {
 
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
@@ -1038,8 +1025,13 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
         gidv.push_back(gid);
         gcorners.push_back(corner_c.first);
     }
-    charuconano::copyVector2Output(gidv,charucoIds);
-    charuconano::copyVector2Output(gcorners,charucoCorners);
+    if (charucoIds.needed()) {
+        cv::Mat(gidv).copyTo(charucoIds);
+    }
+
+    if (charucoCorners.needed()) {
+        cv::Mat(gcorners).copyTo(charucoCorners);
+    }
 
     //Markers
     // 2. Unpack results into OutputArrayOfArrays
@@ -1123,7 +1115,6 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
             diamondIds[idIndex]=comp[markerIdx].id;
 
         }
-        std::cout<<"ID="<<diamondIds<<std::endl;
 
         CharucoBoard2 dboard(cv::Size(2,2),board.dictionary,std::vector<int>{diamondIds[0],diamondIds[1],diamondIds[2],diamondIds[3]} );
         std::vector<cv::Point2f> board_corners(9);
@@ -1133,9 +1124,23 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
                 board_corners[gid]=comp[m][c];
             }
         }
-        for(auto b:board_corners)
-            std::cout<<" "<<b;
-        std::cout<<std::endl;
+
+        //lets apply a corner refinement to the corners. first, estimate average lenght
+
+        // compute the window size for the subpixel refinement based on the size of the markers. Bigger makers, bigger search zone
+        double avrgLen=0;
+        for(auto m:comp){
+            for(int i=0;i<4;i++){
+                avrgLen+=cv::norm(m[i]-m[(i+1)%4]);
+            }
+        }
+        avrgLen/=4*comp.size();
+        //here is the formula to compute the half window size
+        int halfwsize= std::min(int(3* std::max(1.f,float(avrgLen)/float(34) )),9);
+        //now, subpix
+        cv::cornerSubPix(src_gray, board_corners, cv::Size(halfwsize,halfwsize), cv::Size(-1, -1),cv::TermCriteria( cv::TermCriteria::MAX_ITER | cv::TermCriteria::EPS, 12, 0.005));
+
+
         diamondCorners.push_back(board_corners);
         diammons_markers.push_back(comp);
         diammons_ids.push_back(diamondIds);
@@ -1147,8 +1152,6 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
 
      // //now, copy data to output
      charuconano::copyVector2Output(diamondCorners,_diamondCorners);
-    std::cout<<"Diamond corners:\n"<<_diamondCorners.getMat(0)<<std::endl;
-     std::cout<<"Diamond corners:\n"<<_diamondCorners.getMat(1)<<std::endl;
 
      cv::Mat(diammons_ids).copyTo(_diamondIds);
 

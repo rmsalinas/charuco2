@@ -199,7 +199,7 @@ int main() {
             exit(0);
     }
 
-    if(1){
+    if(0){
         cv::Mat outImg, outImg2;
         std::vector<int> ids1={1,2,3,4};
         std::vector<int> ids2={1,22,3,4};
@@ -212,6 +212,8 @@ int main() {
         cv::Mat canvas( outImg.rows, outImg.cols*2,CV_8UC1);
         outImg.copyTo(canvas(cv::Rect(0,0,outImg.cols,outImg.rows)));
         outImg2.copyTo(canvas(cv::Rect(outImg.cols,0,outImg2.cols,outImg2.rows)));
+        //sav to file
+        cv::imwrite("two_diamonds.png", canvas);
         cv::imshow("board",canvas);  while(cv::waitKey(0)!=27) ;
 
 
@@ -251,7 +253,7 @@ int main() {
 
 
     cv::VideoCapture inputVideo;
-    inputVideo.open("/home/salinas/Descargas/board2.mp4");
+    inputVideo.open("/home/salinas/Descargas/diamons2.mp4");
     inputVideo.set(cv::CAP_PROP_POS_FRAMES, 10);
 
 
@@ -278,16 +280,33 @@ int main() {
         // Detect markers and interpolate charuco corners
         detector.detectBoard(image, charucoCorners, charucoIds,  markerCorners, markerIds);
         //draw markers
-        cv::aruco::drawDetectedMarkers(image, markerCorners, markerIds);
+        cv::aruco::drawDetectedMarkers(image, markerCorners, markerIds);        
         for(auto m:markerCorners)
             for(auto p:m)
                 std::cout<<"  "<<p<<"\n";
+
 
         cv::imshow("Detected Markers", image);
         cv::Mat im2=image.clone();
         cv::aruco::drawDetectedCornersCharuco(im2,charucoCorners, charucoIds);
         cv::imshow("charuco", im2);
 
+
+
+        std::vector<std::vector<Point2f>> diamondCorners;
+        std::vector<Vec4i> diamonsIds;
+        detector.detectDiamonds(image, diamondCorners, diamonsIds,  markerCorners, markerIds);
+
+        for(auto dd:diamondCorners){
+            std::cout<<"diamond corners "<<dd.size()<<"\n";
+            for(auto p:dd)
+                std::cout<<"  "<<p<<"\n";
+        }
+        auto canvas=image.clone();
+         aruco::drawDetectedMarkers(canvas, markerCorners, markerIds);
+        drawDetectedDiamonds(canvas, diamondCorners, diamonsIds);
+
+        cv::imshow("diamons", canvas);
 
         char key = (char)cv::waitKey(0);
         if(key==27) break;
