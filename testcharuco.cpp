@@ -74,7 +74,7 @@ int main() {
     }
 
     cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(dictionaryId);
-    cv::aruco::CharucoBoard2 board(cv::Size(squaresX, squaresY),  dictionary,ids);
+    cv::aruco::CharucoBoard2 board(cv::Size(squaresX, squaresY), 1,1, dictionary,ids);
     cv::aruco::CharucoDetector2 detector(board);
 
 
@@ -203,9 +203,9 @@ int main() {
         cv::Mat outImg, outImg2;
         std::vector<int> ids1={1,2,3,4};
         std::vector<int> ids2={1,22,3,4};
-        cv::aruco::CharucoBoard2 board(cv::Size(2, 2),  dictionary,ids1);
+        cv::aruco::CharucoBoard2 board(cv::Size(2, 2),1,1,  dictionary,ids1);
         board.generateImage(200,outImg);
-        cv::aruco::CharucoBoard2 board2(cv::Size(2, 2),  dictionary,ids2);
+        cv::aruco::CharucoBoard2 board2(cv::Size(2, 2), 1,1, dictionary,ids2);
         board2.generateImage(200,outImg2);
 
         //create one image with both
@@ -253,7 +253,7 @@ int main() {
 
 
     cv::VideoCapture inputVideo;
-    inputVideo.open("/home/salinas/Descargas/diamons2.mp4");
+    inputVideo.open("/home/salinas/Descargas/board2.mp4");
     inputVideo.set(cv::CAP_PROP_POS_FRAMES, 10);
 
 
@@ -289,6 +289,18 @@ int main() {
         cv::imshow("Detected Markers", image);
         cv::Mat im2=image.clone();
         cv::aruco::drawDetectedCornersCharuco(im2,charucoCorners, charucoIds);
+        std::vector<cv::Point2f> cimgPoints;
+        std::vector<cv::Point3f> cobjPoints;
+
+        board.matchImagePoints(charucoCorners, charucoIds,cobjPoints,cimgPoints);
+         std::cout<<"BOARDcimgPoints "<<cimgPoints.size()<<"\n";
+         for(auto p:cimgPoints)
+             std::cout<<"  "<<p<<"\n";
+         //obj points
+         std::cout<<"BOARDcobjPoints "<<cobjPoints.size()<<"\n";
+         for(auto p:cobjPoints)
+             std::cout<<"  "<<p<<"\n";
+         std::cout<<std::flush;
         cv::imshow("charuco", im2);
 
 
@@ -306,7 +318,20 @@ int main() {
          aruco::drawDetectedMarkers(canvas, markerCorners, markerIds);
         drawDetectedDiamonds(canvas, diamondCorners, diamonsIds);
 
+
+        if(diamondCorners.size()>0){
+         aruco::CharucoBoard2 b(cv::Size(2,2),1,1,dictionary);
+        b.matchImagePoints(diamondCorners[0],diamonsIds[0],cobjPoints,cimgPoints);
+         std::cout<<"cimgPoints "<<cimgPoints.size()<<"\n";
+         for(auto p:cimgPoints)
+             std::cout<<"  "<<p<<"\n";
+         //obj points
+         std::cout<<"cobjPoints "<<cobjPoints.size()<<"\n";
+         for(auto p:cobjPoints)
+             std::cout<<"  "<<p<<"\n";
+         std::cout<<std::flush;
         cv::imshow("diamons", canvas);
+        }
 
         char key = (char)cv::waitKey(0);
         if(key==27) break;

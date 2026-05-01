@@ -731,10 +731,12 @@ cv::aruco::CharucoBoard2::CharucoBoard2()
 
 }
 
-cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize,   const  Dictionary  &dictionary, InputArray ids)
+cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, float markerSeparation,  const  Dictionary  &dictionary, InputArray ids)
 {
     this->bSize = bSize;
     this->dictionary = dictionary;
+    this->markerLength = markerLength;
+    this->markerSeparation = 0;
     //set the ids
     if(ids.empty()){
         int markerId=0;
@@ -828,6 +830,75 @@ int cv::aruco::CharucoBoard2::getId(int row, int col) const
     if(row<0 || row>=bSize.height || col<0 || col>=bSize.width) return -1;
     int idx=row*bSize.width+col;
     return ids[idx];
+}
+
+void cv::aruco::CharucoBoard2::matchImagePoints(InputArrayOfArrays detectedCorners, InputArray detectedIds, OutputArray objPoints, OutputArray imgPoints) const
+{
+    std::vector<cv::Point2f>  cornersVec;
+    std::vector<int> idsVec;
+
+
+    int totalNChessboardCorners=(bSize.width+1)*(bSize.height+1);
+
+
+
+    CV_Assert(detectedIds.total() > 0ull);
+    CV_Assert(detectedCorners.depth() == CV_32F);
+
+    size_t nDetectedMarkers = detectedIds.total();
+
+    std::vector<Point3f> objPnts;
+    objPnts.reserve(nDetectedMarkers);
+
+    std::vector<Point2f> imgPnts;
+    imgPnts.reserve(nDetectedMarkers);
+
+    Mat detectedIdsMat = detectedIds.getMat();
+    std::vector<Mat> detectedCornersVecMat;
+
+    detectedCorners.getMatVector(detectedCornersVecMat);
+   // CV_Assert((int)detectedCornersVecMat.front().total()*detectedCornersVecMat.front().channels() == 8);
+
+    std::cout<<detectedIds.total()<<" "<<detectedCorners.total()<<" "<<bSize.width<<" "<<bSize.height<<std::endl;
+    //its a diamon?
+    if(detectedIds.size().width==1 &&detectedIds.size().height == 4 && detectedCorners.total()==9 && bSize.width==2 && bSize.height==2){
+
+        std::cout<<"Its a diamon"<<std::endl;
+        //points are given in order, we do not need the detectedIds
+        int idx=0;
+        for(int row=0;row<3;row++){
+            for(int col=0;col<3;col++,idx++){
+                cv::Point3f p3d;
+                p3d.x=col*markerLength;
+                p3d.y=row*markerLength;
+                p3d.z=0;
+                objPnts.push_back(p3d);
+                imgPnts.push_back(detectedCornersVecMat[idx].ptr<Point2f>(0)[0]);
+            }
+        }
+    }
+    //its a chessboard
+    else{
+
+        for(unsigned int i = 0; i < detectedIdsMat.total(); i++) {
+            imgPnts.push_back(detectedCornersVecMat[i].ptr<Point2f>(0)[0]);
+            int currentId = detectedIdsMat.at<int>(i);
+            int row=currentId / (bSize.width+1);
+            int col=currentId % (bSize.width+1);
+            cv::Point3f p3d;
+            p3d.x=col*markerLength;
+            p3d.y=row*markerLength;
+            p3d.z=0;
+            objPnts.push_back(p3d);
+        }
+
+    }
+
+
+    // create output
+    Mat(objPnts).copyTo(objPoints);
+    Mat(imgPnts).copyTo(imgPoints);
+
 }
 
 cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &board)
@@ -931,7 +1002,7 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
                     int gid1=getGlobalCornerID(marker.id,c,board);
                     int gid2=getGlobalCornerID(comp[idx/4].id,idx%4,board);
                     if(gid1!=gid2){
-                        std::cout<<"Marker "<<marker.id<<" corner "<<c<<" is connected to marker "<<comp[idx/4].id<<" corner "<<idx%4<<" with distance "<<std::sqrt(dists[0])<<" and global corner ids "<<gid1<<" and "<<gid2<<std::endl;
+//                        std::cout<<"Marker "<<marker.id<<" corner "<<c<<" is connected to marker "<<comp[idx/4].id<<" corner "<<idx%4<<" with distance "<<std::sqrt(dists[0])<<" and global corner ids "<<gid1<<" and "<<gid2<<std::endl;
                         is_consistent=false;
                     }
                 }
@@ -1116,7 +1187,7 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
 
         }
 
-        CharucoBoard2 dboard(cv::Size(2,2),board.dictionary,std::vector<int>{diamondIds[0],diamondIds[1],diamondIds[2],diamondIds[3]} );
+        CharucoBoard2 dboard(cv::Size(2,2),1,1,board.dictionary,std::vector<int>{diamondIds[0],diamondIds[1],diamondIds[2],diamondIds[3]} );
         std::vector<cv::Point2f> board_corners(9);
         for(int m=0;m<comp.size();m++){
             for(int c=0;c<4;c++){
