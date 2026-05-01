@@ -4,7 +4,7 @@
 #include <opencv2/highgui.hpp>
 #include <map>
 #include <queue>
-namespace    charuconano{
+namespace     {
 /**
  * @brief The Marker class is a marker detectable by the library
  * It is a vector where each corner is a corner of the detected marker
@@ -150,7 +150,7 @@ std::vector<Marker>  MarkerDetector::detect(const cv::Mat &img, const DetectorPa
     }
     //now, for each candidate check bits inside
     int dictIndex=-1;
-    for(auto dict:params.dicts){
+    for(const auto &dict:params.dicts){
         std::vector<Marker> currDirMarkerDetected;
         dictIndex++;
         cv::Mat bits(dict.markerSize+2,dict.markerSize+2,CV_8UC1),bitadaptive(dict.markerSize+2,dict.markerSize+2,CV_8UC1);
@@ -552,10 +552,10 @@ std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Ma
 
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
     cv::erode(thresImage, thresImage, kernel,{-1,-1},erosionIt);
-    charuconano::DetectorParameters params;
+    DetectorParameters params;
     //params.expansionDueToErosion=erosionIt;
     params.dicts.push_back(dict);
-    return charuconano::MarkerDetector::detect(src_gray,params,nullptr,thresImage);
+    return MarkerDetector::detect(src_gray,params,nullptr,thresImage);
 
 
 }
@@ -624,7 +624,7 @@ std::vector<std::vector<Marker>> connectedComponents(const std::vector<Marker> &
 
     //now, for each corner, find the neighbors closer than a threshold
     const float threshold=10.0f;
-    for(int m=0;m<markers.size();m++){
+    for(size_t m=0;m<markers.size();m++){
         for(int i=0;i<4;i++){
             std::vector<int> indices;
             std::vector<float> dists;
@@ -656,14 +656,14 @@ std::vector<std::vector<Marker>> connectedComponents(const std::vector<Marker> &
 
 
 std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Mat &src_gray){
-    std::vector<charuconano::Marker>  markers_black,markers_white;
+    std::vector<Marker>  markers_black,markers_white;
     cv::Mat thresImage;
 
     //BLACK MARKERS
     cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
     thresImage=thresImage-src_gray;
     cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
-    markers_black=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+    markers_black=detect(board.dictionary,src_gray,thresImage,1);//black markers
 
     //because we have shrink the borders for black markers, we will expand the corners a bit from the center
     for(auto & marker:markers_black){
@@ -713,14 +713,67 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
     }
     thresImage=255-thresImage;
     src_gray=255-src_gray;
-    markers_white=charuconano::detect(board.dictionary,src_gray,thresImage,1);//black markers
+    markers_white=detect(board.dictionary,src_gray,thresImage,1);//black markers
 
     // Combine results from both
-    std::vector<charuconano::Marker> allMarkers;
+    std::vector<Marker> allMarkers;
     allMarkers.reserve(markers_black.size() + markers_white.size());
     allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
     allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
       return allMarkers;
+}
+
+
+//given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
+
+    int getGlobalCornerID(int marker_id, int corner_id,const cv::aruco::CharucoBoard2 &Board)
+{
+    //obtain the row, col of the marker_id
+    auto row_col=Board.getIdPos(marker_id);
+    if(corner_id<=1){
+        return (Board.bSize.width+1) *row_col.first +  row_col.second+  corner_id;
+    }
+    else if(corner_id==2){
+        return (Board.bSize.width+1) *(row_col.first+1) +  row_col.second+ 1;
+    }
+    else  {
+        return (Board.bSize.width+1) *(row_col.first+1) +  row_col.second;
+
+    }
+}
+//opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
+
+std::vector<std::pair<int,int>> getMarkerCornersFromGlobalCornerID( int gid,const cv::aruco::CharucoBoard2 &Board)
+{
+    std::vector<std::pair<int,int>> result;
+    const int W = Board.bSize.width;
+
+    // Decompose gid into (cr, cc) in the (H+1) x (W+1) corner grid.
+    // Inverse of  gid = (W+1) * cr + cc  used in getGlobalCornerID.
+    const int cr = gid / (W + 1);
+    const int cc = gid % (W + 1);
+
+    // Up to 4 markers share a global corner. Sort order: 0=TL, 1=TR, 2=BR, 3=BL.
+    // Board.getId() returns -1 for out-of-range (row,col), so it doubles as a bounds check.
+    int id;
+
+    // Marker at (cr, cc) sees this point as its top-left (0)
+    id = Board.getId(cr,     cc);
+    if (id != -1) result.emplace_back(id, 0);
+
+    // Marker at (cr, cc-1) sees this point as its top-right (1)
+    id = Board.getId(cr,     cc - 1);
+    if (id != -1) result.emplace_back(id, 1);
+
+    // Marker at (cr-1, cc-1) sees this point as its bottom-right (2)
+    id = Board.getId(cr - 1, cc - 1);
+    if (id != -1) result.emplace_back(id, 2);
+
+    // Marker at (cr-1, cc) sees this point as its bottom-left (3)
+    id = Board.getId(cr - 1, cc);
+    if (id != -1) result.emplace_back(id, 3);
+
+    return result;
 }
 
 }
@@ -736,6 +789,7 @@ cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, floa
     this->bSize = bSize;
     this->dictionary = dictionary;
     this->markerLength = markerLength;
+    (void)markerSeparation;
     this->markerSeparation = 0;
     //set the ids
     if(ids.empty()){
@@ -751,7 +805,7 @@ cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, floa
     }
     else{
         Mat idsMat=ids.getMat();
-        if(idsMat.total()!=bSize.area() || idsMat.type()!=CV_32SC1){
+        if(idsMat.total()!=size_t(bSize.area()) || idsMat.type()!=CV_32SC1){
             CV_Error(cv::Error::StsBadArg, "Ids must be a vector of int with the same number of elements as the board size");
         }
         this->ids=std::vector<int>(idsMat.begin<int>(),idsMat.end<int>());
@@ -838,7 +892,6 @@ void cv::aruco::CharucoBoard2::matchImagePoints(InputArrayOfArrays detectedCorne
     std::vector<int> idsVec;
 
 
-    int totalNChessboardCorners=(bSize.width+1)*(bSize.height+1);
 
 
 
@@ -906,58 +959,6 @@ cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &board)
 this->board=board;
 
 }
-//given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
-
-int cv::aruco::CharucoDetector2::getGlobalCornerID(int marker_id, int corner_id,const CharucoBoard2 &Board) const
-{
-    //obtain the row, col of the marker_id
-    auto row_col=Board.getIdPos(marker_id);
-    if(corner_id<=1){
-        return (Board.bSize.width+1) *row_col.first +  row_col.second+  corner_id;
-    }
-    else if(corner_id==2){
-        return (Board.bSize.width+1) *(row_col.first+1) +  row_col.second+ 1;
-    }
-    else  {
-        return (Board.bSize.width+1) *(row_col.first+1) +  row_col.second;
-
-    }
-}
-//opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
-
-std::vector<std::pair<int,int>> cv::aruco::CharucoDetector2::getMarkerCornersFromGlobalCornerID( int gid,const CharucoBoard2 &Board)const
-{
-    std::vector<std::pair<int,int>> result;
-    const int W = Board.bSize.width;
-
-    // Decompose gid into (cr, cc) in the (H+1) x (W+1) corner grid.
-    // Inverse of  gid = (W+1) * cr + cc  used in getGlobalCornerID.
-    const int cr = gid / (W + 1);
-    const int cc = gid % (W + 1);
-
-    // Up to 4 markers share a global corner. Sort order: 0=TL, 1=TR, 2=BR, 3=BL.
-    // Board.getId() returns -1 for out-of-range (row,col), so it doubles as a bounds check.
-    int id;
-
-    // Marker at (cr, cc) sees this point as its top-left (0)
-    id = Board.getId(cr,     cc);
-    if (id != -1) result.emplace_back(id, 0);
-
-    // Marker at (cr, cc-1) sees this point as its top-right (1)
-    id = Board.getId(cr,     cc - 1);
-    if (id != -1) result.emplace_back(id, 1);
-
-    // Marker at (cr-1, cc-1) sees this point as its bottom-right (2)
-    id = Board.getId(cr - 1, cc - 1);
-    if (id != -1) result.emplace_back(id, 2);
-
-    // Marker at (cr-1, cc) sees this point as its bottom-left (3)
-    id = Board.getId(cr - 1, cc);
-    if (id != -1) result.emplace_back(id, 3);
-
-    return result;
-}
-
 
 void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
                                               InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds)
@@ -969,23 +970,23 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
     else src_gray=image.getMat();
 
     //detect all markers
-    auto allMarkers=charuconano::detectBWMarkers(board, src_gray);
+    auto allMarkers=detectBWMarkers(board, src_gray);
     //remove markers not belonging to the list of ids of the board
     allMarkers.erase(std::remove_if(allMarkers.begin(), allMarkers.end(),
-                                    [this](const charuconano::Marker &m) {
+                                    [this](const Marker &m) {
                                         return std::find(board.ids.begin(), board.ids.end(), m.id) == board.ids.end();
                                     }), allMarkers.end());
 
 
     if(allMarkers.empty())return;
     //obtain the connected components
-    std::vector<std::vector<charuconano::Marker> > connected_markers=charuconano::connectedComponents(allMarkers);
+    std::vector<std::vector<Marker> > connected_markers=connectedComponents(allMarkers);
 
     //lets detect possible inconsistencies, i.e., markers in the wrong order, possibly belonging to another board configuration
-    std::vector<std::vector<charuconano::Marker> > consistent_connected_markers;
+    std::vector<std::vector<Marker> > consistent_connected_markers;
     for(auto &comp:connected_markers){
         int threshold=10;
-        auto findex=charuconano::buildFlannIndex(comp);
+        auto findex=buildFlannIndex(comp);
         bool is_consistent=true;
         //for each corner, of each marker we will analyze its nearst neighbor. If is really connected, we will check if
         //the connection is consistent
@@ -1016,9 +1017,9 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
     if(consistent_connected_markers.empty())return;
 
     //select the one with more markers belonging to the board (at least 2)
-    std::vector<charuconano::Marker> connected_markers_filtered;
+    std::vector<Marker> connected_markers_filtered;
      for(const auto &comp:consistent_connected_markers){
-        int validMarkers=0;
+        size_t validMarkers=0;
         for(const auto &m:comp){
             if(std::find(board.ids.begin(),board.ids.end(),m.id)!=board.ids.end()){
                 validMarkers++;
@@ -1081,7 +1082,8 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
         //find in how many markers it is involved
         for(auto [markerid,cornerid]:getMarkerCornersFromGlobalCornerID(gid,board)){
             //see if the makrer id is detected
-            auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid](const charuconano::Marker &m){return m.id==markerid;});
+            auto markerid_copy=markerid;//capturing markerid only in C++20, lets use a copy for prev compilers
+            auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid_copy](const Marker &m){return m.id==markerid_copy;});
             if(it!=allMarkers.end()){
                 (*it)[cornerid]=corner_c.first;
             }
@@ -1106,7 +1108,7 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
 
     //Markers
     // 2. Unpack results into OutputArrayOfArrays
-    charuconano::copyVector2Output(allMarkers, markerCorners);
+    copyVector2Output(allMarkers, markerCorners);
 
     // 3. Assign to output ids
     std::vector<int> marker_idsVec;
@@ -1127,16 +1129,16 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
     else src_gray=image.getMat();
 
     //detect all markers
-    auto allMarkers=charuconano::detectBWMarkers(board, src_gray);
+    auto allMarkers=detectBWMarkers(board, src_gray);
 
     if(allMarkers.empty())return;
     //obtain the connected components
-    std::vector<std::vector<charuconano::Marker> > connected_markers=charuconano::connectedComponents(allMarkers);
+    std::vector<std::vector<Marker> > connected_markers=connectedComponents(allMarkers);
 
     //discard these that have more or less than 4 elements
 
     std::vector<Vec4i> diammons_ids;
-    std::vector<  std::vector<charuconano::Marker> > diammons_markers;
+    std::vector<  std::vector<Marker> > diammons_markers;
     std::vector<std::vector<cv::Point2f> > diamondCorners;
 
     int threshold=10*10;
@@ -1146,10 +1148,10 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
     for(const auto &comp:connected_markers){
         if(comp.size()!=4) continue;
         //make sure they   share 3 corners
-        auto flannIndex=charuconano::buildFlannIndex(comp);
+        auto flannIndex=buildFlannIndex(comp);
         int totalSharedCorners=0,cornerWithMostSharedCorners=-1;
         std::pair<int,int> centralCorner;//this is the central poisition, that let us know the order of the markers in the diamond
-        for(int m=0;m<comp.size();m++){
+        for(size_t m=0;m<comp.size();m++){
             auto &marker=comp[m];
              for(int c=0;c<4;c++){
                  query.ptr<float>(0)[0]=marker[c].x;
@@ -1189,7 +1191,7 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
 
         CharucoBoard2 dboard(cv::Size(2,2),1,1,board.dictionary,std::vector<int>{diamondIds[0],diamondIds[1],diamondIds[2],diamondIds[3]} );
         std::vector<cv::Point2f> board_corners(9);
-        for(int m=0;m<comp.size();m++){
+        for(size_t m=0;m<comp.size();m++){
             for(int c=0;c<4;c++){
                 auto gid=getGlobalCornerID(comp[m].id,c,dboard);
                 board_corners[gid]=comp[m][c];
@@ -1222,22 +1224,22 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
 
 
      // //now, copy data to output
-     charuconano::copyVector2Output(diamondCorners,_diamondCorners);
+     copyVector2Output(diamondCorners,_diamondCorners);
 
      cv::Mat(diammons_ids).copyTo(_diamondIds);
 
      //group the markers and their ids into a single vector
      if( inMarkerCorners.needed() || inMarkerIds.needed()){
-         std::vector<charuconano::Marker> markerCorners;
+         std::vector<Marker> markerCorners;
          std::vector<int> markerIds;
-         for(int i=0;i<diammons_markers.size();i++){
-             for(int j=0;j<diammons_markers[i].size();j++){
+         for(size_t i=0;i<diammons_markers.size();i++){
+             for(size_t j=0;j<diammons_markers[i].size();j++){
                  markerCorners.push_back(diammons_markers[i][j]);
                  markerIds.push_back(diammons_markers[i][j].id);
              }
          }
          if( inMarkerCorners.needed())
-             charuconano::copyVector2Output(markerCorners,inMarkerCorners);
+             copyVector2Output(markerCorners,inMarkerCorners);
          if( inMarkerIds.needed())
              cv::Mat(markerIds).copyTo(inMarkerIds);
      }

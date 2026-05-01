@@ -24,7 +24,7 @@ void drawDetectedDiamonds(InputOutputArray _image, InputArrayOfArrays _corners, 
 
         // draw marker sides
         if(currentMarker.total() == 4){
-            for(int j = 0; j < currentMarker.total(); j++) {
+            for(size_t j = 0; j < currentMarker.total(); j++) {
                 Point p0, p1;
                 p0 = currentMarker.at<Point>(j);
                 p1 = currentMarker.at<Point>((j + 1) % currentMarker.total());
@@ -45,7 +45,7 @@ void drawDetectedDiamonds(InputOutputArray _image, InputArrayOfArrays _corners, 
         // draw id composed by four numbers
         if(_ids.total() != 0) {
             Point cent(0, 0);
-            for(int p = 0; p < currentMarker.total(); p++)
+            for(size_t p = 0; p < currentMarker.total(); p++)
                 cent += currentMarker.at<Point>(p);
             cent = cent / float(currentMarker.total());
             std::stringstream s;
@@ -61,8 +61,6 @@ int main() {
     // Basic ChArUco board setup
     int squaresX = 4;
     int squaresY = 6;
-    float squareLength = 0.04f;
-    float markerLength = 0.02f;
     cv::aruco::PredefinedDictionaryType dictionaryId = cv::aruco::DICT_ARUCO_MIP_36h12;
 
     std::vector<int> ids;
@@ -193,7 +191,7 @@ int main() {
 
 
         cv::imshow("Detected Diamond", output);
-        while (cv::waitKey(0) != 27) ;
+        while (cv::waitKey(0) != 27){}
 
 
             exit(0);

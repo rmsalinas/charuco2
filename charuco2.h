@@ -58,11 +58,7 @@ public:
                      InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds);
     void detectDiamonds(InputArray image, OutputArrayOfArrays _diamondCorners, OutputArray _diamondIds,
                         InputOutputArrayOfArrays inMarkerCorners, InputOutputArray inMarkerIds) ;
-private:
-    //given a marker id and one of its corners, return the global corner id of that corner, which is a unique id for that corner in the whole board,
-    int getGlobalCornerID(int marker_id,int corner_id,const CharucoBoard2 &board) const;
-    //opposite of getGlobalCornerID, given a global corner id, return the marker ids and corner ids of that corner
-    std::vector<std::pair<int,int>>  getMarkerCornersFromGlobalCornerID( int gid,const CharucoBoard2 &board)const;
+
 
 };
 
