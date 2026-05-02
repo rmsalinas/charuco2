@@ -3,6 +3,48 @@
 #include <opencv2/objdetect/charuco_detector.hpp>
 #include "charuco2.h"
 using namespace cv;
+void drawDetectedCornersCharuco(InputOutputArray _image, InputArray _charucoCorners,
+                                InputArray _charucoIds, Scalar cornerColor) {
+    CV_Assert(!_image.getMat().empty() &&
+              (_image.getMat().channels() == 1 || _image.getMat().channels() == 3));
+    CV_Assert((_charucoCorners.total() == _charucoIds.total()) ||
+              _charucoIds.total() == 0);
+    CV_Assert(_charucoCorners.channels() == 2);
+
+    Mat charucoCorners = _charucoCorners.getMat();
+    if (charucoCorners.type() != CV_32SC2)
+        charucoCorners.convertTo(charucoCorners, CV_32SC2);
+    Mat charucoIds;
+    if (!_charucoIds.empty())
+        charucoIds = _charucoIds.getMat();
+    size_t nCorners = charucoCorners.total();
+
+    for(size_t i = 0; i < nCorners; i++) {
+        Point corner = charucoCorners.at<Point>((int)i);
+
+        // draw first corner mark
+        rectangle(_image, corner - Point(3, 3), corner + Point(3, 3), cornerColor, 1, LINE_AA);
+
+        // draw ID
+        if(!_charucoIds.empty()) {
+            int id = charucoIds.at<int>((int)i);
+            std::stringstream s;
+            s << "id=" << id;
+
+            // Variables de diseño ajustadas
+            double fontScale = 0.75; // 50% más grande que 0.5
+            Point offset(-35, -15);  // Movido un poco más arriba y a la izquierda para evitar solapamiento
+
+            // 1. Contorno negro más grueso (grosor 4)
+            putText(_image, s.str(), corner + offset, FONT_HERSHEY_SIMPLEX, fontScale,
+                    Scalar(0, 0, 0), 4, LINE_AA);
+
+            // 2. Texto principal (grosor 2)
+            putText(_image, s.str(), corner + offset, FONT_HERSHEY_SIMPLEX, fontScale,
+                    cornerColor, 2, LINE_AA);
+        }
+    }
+}
 
 void drawDetectedDiamonds(InputOutputArray _image, InputArrayOfArrays _corners, InputArray _ids=cv::noArray(), Scalar borderColor = cv::Scalar(0, 0, 255)) {
     CV_Assert(_image.getMat().total() != 0 &&
@@ -59,8 +101,8 @@ int main() {
     std::cout << "OpenCV Version: " << CV_VERSION << std::endl;
 
     // Basic ChArUco board setup
-    int squaresX = 4;
-    int squaresY = 6;
+    int squaresX = 9;
+    int squaresY = 5;
     cv::aruco::PredefinedDictionaryType dictionaryId = cv::aruco::DICT_ARUCO_MIP_36h12;
 
     std::vector<int> ids;
@@ -75,6 +117,31 @@ int main() {
     cv::aruco::CharucoBoard2 board(cv::Size(squaresX, squaresY), 1,1, dictionary,ids);
     cv::aruco::CharucoDetector2 detector(board);
 
+    if(1){
+        cv::aruco::CharucoBoard board2(cv::Size(3, 3), 0.1,0.05, dictionary);
+        cv::Mat outImg;
+        board2.generateImage(cv::Size(400,400), outImg);
+
+        //detect the board and draw the corners
+        std::vector<int> markerIds;
+        std::vector<std::vector<Point2f>> markerCorners;
+        std::vector<Point2f> charucoCorners;
+        std::vector<int> charucoIds;
+        cv::aruco::CharucoDetector detector2(board2);
+        detector2.detectBoard(outImg, charucoCorners, charucoIds,  markerCorners, markerIds);
+        cv::cvtColor(outImg,outImg,cv::COLOR_GRAY2BGR);
+//        cv::aruco::drawDetectedMarkers(outImg, markerCorners, markerIds);
+        for(auto p:charucoCorners)
+            cv::circle(outImg,p,10,cv::Scalar(0,255,0),3);
+        drawDetectedCornersCharuco(outImg, charucoCorners, charucoIds,cv::Scalar(0,255,0));
+        //draw a circle around each charucoCorner
+         cv::imshow("board1corners",outImg);
+
+        //save to file
+        cv::imwrite("diamon_standard.jpg", outImg);
+         while(cv::waitKey(0)!=27) ;
+
+    }
 
     if(0){
         // ---------- 1. Setup ----------
@@ -239,13 +306,25 @@ int main() {
 
     if(1){
         cv::Mat outImg;
-        board.generateImage(200,outImg);
+        board.generateImage(cv::Size(1800,1200),outImg);
         cv::imshow("board",outImg);
         //save to board.jpg
-        cv::imwrite("board.jpg", outImg);
+        //detec and draw
+        std::vector<int> markerIds;
+        std::vector<std::vector<Point2f>> markerCorners;
+        std::vector<Point2f> charucoCorners;
+        std::vector<int> charucoIds;
+        detector.detectBoard(outImg, charucoCorners, charucoIds,  markerCorners, markerIds);
+        cv::cvtColor(outImg,outImg,cv::COLOR_GRAY2BGR);
+//        cv::aruco::drawDetectedMarkers(outImg, markerCorners, markerIds);
+        for(auto p:charucoCorners)
+            cv::circle(outImg,p,10,cv::Scalar(0,255,0),3);
+        drawDetectedCornersCharuco(outImg, charucoCorners, charucoIds,cv::Scalar(0,255,0));
+        cv::imshow("boardcorners",outImg);
 
 
          while(cv::waitKey(0)!=27) ;
+         cv::imwrite("diamon_charuco2.jpg", outImg);
 
     }
 

@@ -19,6 +19,7 @@ public:
      */
     CharucoBoard2(cv::Size bSize, float markerLength, float markerSeparation,const Dictionary &dictionary, InputArray ids = noArray());
     void generateImage(float markerSizePix, Mat& outImage) const;
+    void generateImage(cv::Size outSize, Mat& outImage, int marginSize=0, int borderBits=1) const;
     //returns the row,col of a given marker id
     std::pair<int,int> getIdPos(int id)const;
     //returns the id at the row,col indicated

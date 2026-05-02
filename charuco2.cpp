@@ -814,58 +814,69 @@ cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, floa
 
 void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage) const
 {
-
     int border=markerSizePix/4;
     int nmarkers=bSize.area();
-    //check no more than allowed by the dictionary
-    if(nmarkers > dictionary.bytesList.rows){
+    if(nmarkers > dictionary.bytesList.rows)
         CV_Error(cv::Error::StsBadArg, "Number of markers exceeds the number of markers in the dictionary");
-    }
-    // For simplicity, we will just create a blank image and draw the markers at fixed positions.
-    cv::Size imgSize(markerSizePix*bSize.width + 2*border , markerSizePix*bSize.height+2*border);
 
+    cv::Size imgSize(markerSizePix*bSize.width + 2*border , markerSizePix*bSize.height+2*border);
     int markerIdx=0;
     outImage = Mat::zeros(imgSize, CV_8UC1);
     outImage=255;
-    int startLineColor = 0; // White color for the markers
+    int startLineColor = 0;
     for(int y=0; y<bSize.height; y++){
         int curMarkerColor=startLineColor;
         for(int x= 0; x<bSize.width; x++,markerIdx++){
             Mat markerImg;
             dictionary.generateImageMarker(ids[markerIdx], markerSizePix, markerImg);
-            // Place the marker in the correct position
             int posX = x * markerSizePix + border;
             int posY = y * markerSizePix + border;
             if(curMarkerColor)
                 markerImg=255-markerImg;
             markerImg.copyTo(outImage(Rect(posX, posY, markerSizePix, markerSizePix)));
-            curMarkerColor= curMarkerColor==1?0:1; // Alternate marker colors
-
+            curMarkerColor= curMarkerColor==1?0:1;
         }
-        startLineColor=startLineColor==1?0:1; // Alternate marker colors
+        startLineColor=startLineColor==1?0:1;
     }
 
-    //now, draw blocks closing white markers in borders, first top and bottom rows, then left and right columns
-    for(int x=1;x<bSize.width;x+=2){
+    for(int x=1;x<bSize.width;x+=2)
         cv::rectangle(outImage,Rect(border+x*markerSizePix,0,markerSizePix,border),Scalar::all(0),FILLED);
-    }
-    for(int x=bSize.height%2;x<bSize.width;x+=2){
-        cv::rectangle(outImage,Rect(border+x*markerSizePix,border+markerSizePix*bSize.height ,markerSizePix,border),Scalar::all(0),FILLED);
-
-    }
-    //now the left and right columns
-    for(int y=1;y<bSize.height;y+=2){
+    for(int x=bSize.height%2;x<bSize.width;x+=2)
+        cv::rectangle(outImage,Rect(border+x*markerSizePix,border+markerSizePix*bSize.height,markerSizePix,border),Scalar::all(0),FILLED);
+    for(int y=1;y<bSize.height;y+=2)
         cv::rectangle(outImage,Rect(0,border+y*markerSizePix,border,markerSizePix),Scalar::all(0),FILLED);
-    }
-    for(int y=bSize.width%2;y<bSize.height;y+=2){
+    for(int y=bSize.width%2;y<bSize.height;y+=2)
         cv::rectangle(outImage,Rect(border+markerSizePix*bSize.width,border+y*markerSizePix,border,markerSizePix),Scalar::all(0),FILLED);
-    }
 
-    //now, the 4 corners if needed
     cv::rectangle(outImage,Rect(0,0,border,border),Scalar::all(0),FILLED);
     cv::rectangle(outImage,Rect(outImage.cols-border,0,border,border),Scalar::all(0),FILLED);
     cv::rectangle(outImage,Rect(0,outImage.rows-border,border,border),Scalar::all(0),FILLED);
     cv::rectangle(outImage,Rect(outImage.cols-border,outImage.rows-border,border,border),Scalar::all(0),FILLED);
+}
+
+void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, Mat &outImage, int marginSize, int borderBits) const
+{
+    (void)borderBits; // kept for API compatibility
+    int markerSizePix = std::min((outSize.width  - 2*marginSize) / bSize.width,
+                                  (outSize.height - 2*marginSize) / bSize.height);
+    if (markerSizePix < 1)
+        CV_Error(cv::Error::StsBadArg, "Output image size too small for the board dimensions");
+
+    Mat boardImg;
+    generateImage(markerSizePix, boardImg);
+
+    // scale to fill the available area while preserving the board's aspect ratio
+    int availW = outSize.width  - 2*marginSize;
+    int availH = outSize.height - 2*marginSize;
+    float scale = std::min((float)availW / boardImg.cols, (float)availH / boardImg.rows);
+    cv::Size scaledSize(std::round(boardImg.cols * scale), std::round(boardImg.rows * scale));
+    int interp = (scale < 1.0f) ? cv::INTER_AREA : cv::INTER_LINEAR;
+    cv::resize(boardImg, boardImg, scaledSize, 0, 0, interp);
+
+    outImage = Mat(outSize, CV_8UC1, Scalar::all(255));
+    int offsetX = (outSize.width  - boardImg.cols) / 2;
+    int offsetY = (outSize.height - boardImg.rows) / 2;
+    boardImg.copyTo(outImage(Rect(offsetX, offsetY, boardImg.cols, boardImg.rows)));
 }
 
 
@@ -1243,8 +1254,5 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
          if( inMarkerIds.needed())
              cv::Mat(markerIds).copyTo(inMarkerIds);
      }
-
-     // OutputArrayOfArrays _diamondCorners, OutputArray _diamondIds,
-     //     InputOutputArrayOfArrays inMarkerCorners, InputOutputArray inMarkerIds
 
 }
