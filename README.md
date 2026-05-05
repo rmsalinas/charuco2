@@ -140,7 +140,7 @@ If you use ChArUco2 in your research, please cite:
 Please also cite the foundational ArUco papers:
 
 1. S. Garrido-Jurado et al., "Automatic generation and detection of highly reliable fiducial markers under occlusion", Pattern Recognition, 2014.
-2. F. J. Romero-Ramirez et al., "Speeded up detection of squared fiducial markers", Image and Vision Computing, 2018.
+2. S. Garrido-Jurado, F. J. Romero-Ramirez, R. Muñoz-Salinas, "ArUco Nano: a simpler, faster, and more reliable fiducial marker detector", SoftwareX, 2026.
 
 ## License
 
