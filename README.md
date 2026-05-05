@@ -1,6 +1,6 @@
 # ChArUco2
 
-Enhanced calibration boards with dual black-and-white marker detection.
+Enhanced calibration boards with dual black-and-white marker detection. [Download Preprint](https://drive.google.com/file/d/1aoD9GFGcO4tB5dvqpl2JVSoL3XS0mptK/view?usp=drive_link)
 
 ## Introduction
 
