@@ -4,7 +4,6 @@
 #include "charuco2.h"
 using namespace cv;
 
-// Function to draw detected diamonds on the image, considering the new Charuco2 board structure with 9 corners per marker
 void drawDetectedDiamonds(cv::InputOutputArray _image, cv::InputArrayOfArrays _corners, cv::InputArray _ids=cv::noArray(), cv::Scalar borderColor = cv::Scalar(0, 0, 255)) ;
 
 

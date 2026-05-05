@@ -1,7 +1,6 @@
 #include "charuco2.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/calib3d.hpp>
-#include <opencv2/highgui.hpp>
 #include <map>
 #include <queue>
 namespace     {
@@ -752,13 +751,6 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
     cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
 
 
-
-    {
-        thresImage=255-thresImage;
-        cv::imwrite("before.jpg",thresImage);
-        thresImage=255-thresImage;
-
-    }
     //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
     for(auto m:markers_black){
         auto n02=m[2]-m[0];
@@ -781,8 +773,7 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
         cv::line(thresImage,p0,p1,cv::Scalar::all(255),2);
     }
     thresImage=255-thresImage;
-    cv::imwrite("after.jpg",thresImage);
-    src_gray=255-src_gray;
+     src_gray=255-src_gray;
     markers_white=detect(board.dictionary,src_gray,thresImage,1);//white markers
 
     src_gray=255-src_gray;
@@ -933,7 +924,7 @@ void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage)
   //  cv::imshow("generate1",outImage);
 }
 
-void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, Mat &outImage, int marginSize, int borderBits) const
+void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, OutputArray outImage, int marginSize, int borderBits) const
 {
     (void)borderBits; // kept for API compatibility
     int markerSizePix = std::min((outSize.width  - 2*marginSize) / bSize.width,
@@ -952,10 +943,12 @@ void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, Mat &outImage, in
     int interp = (scale < 1.0f) ? cv::INTER_AREA : cv::INTER_LINEAR;
     cv::resize(boardImg, boardImg, scaledSize, 0, 0, interp);
 
-    outImage = Mat(outSize, CV_8UC1, Scalar::all(255));
+    auto oi=outImage.getMat();
+    oi.create(outSize, CV_8UC1);
+    oi=Scalar::all(255);
     int offsetX = (outSize.width  - boardImg.cols) / 2;
     int offsetY = (outSize.height - boardImg.rows) / 2;
-    boardImg.copyTo(outImage(Rect(offsetX, offsetY, boardImg.cols, boardImg.rows)));
+    boardImg.copyTo(oi(Rect(offsetX, offsetY, boardImg.cols, boardImg.rows)));
    // cv::imshow("generate2",boardImg);
 }
 

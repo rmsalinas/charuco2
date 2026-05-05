@@ -20,6 +20,7 @@ int main(int argc,char **argv) {
         cv::aruco::CharucoBoard2 board(boardSize, 1,1, dictionary);
         cv::aruco::CharucoDetector2 detector(board);
 
+
         //detect the board and draw the corners
         cv::VideoCapture inputVideo;
         cv::Mat image;
