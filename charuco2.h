@@ -56,7 +56,7 @@ public:
     //void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
 
     void detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
-                     InputOutputArrayOfArrays markerCorners, InputOutputArray markerIds);
+                     InputOutputArrayOfArrays markerCorners=cv::noArray(), InputOutputArray markerIds=cv::noArray());
     void detectDiamonds(InputArray image, OutputArrayOfArrays _diamondCorners, OutputArray _diamondIds,
                         InputOutputArrayOfArrays inMarkerCorners, InputOutputArray inMarkerIds) ;
 

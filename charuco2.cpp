@@ -16,6 +16,8 @@ public:
     int id=-1;
     //id of the dict
     int dict=-1;
+    //max distance between any two similar corners
+    int cornerMaxDistance(const Marker &m2);
 };
 struct DetectorParameters {
     int boxFilterSize=15,thres=3; //values for adaptive thresholding
@@ -58,6 +60,18 @@ struct Homographer{
     }
     cv::Mat H;
 };
+
+int Marker::cornerMaxDistance(const Marker &m2)
+{
+    int md=0;
+    for(int i=0;i<4;i++){
+        int d=int(((*this)[i].x-m2[i].x)*((*this)[i].x-m2[i].x)+((*this)[i].y-m2[i].y)*((*this)[i].y-m2[i].y));
+        if(d>md) md=d;
+    }
+    return md;
+}
+
+
 //Marker intersection. Tells the marker with most corners into another. 0 if no intersection or tie
 int MarkerDetector::isInto(const std::vector<cv::Point2f> &a, const std::vector<cv::Point2f> &b) {
     // Lambda for point-in-polygon test (Ray Casting)
@@ -548,10 +562,12 @@ void copyVector2Output(std::vector<std::vector<cv::Point2f> > &vec, cv::OutputAr
     }
 }
 
-std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Mat & thresImage,   int erosionIt)  {
+std::vector<Marker> detect(cv::aruco::Dictionary dict, cv::Mat & src_gray,cv::Mat & thresImage,   int erosionIt){
 
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_CROSS, cv::Size(3, 3));
     cv::erode(thresImage, thresImage, kernel,{-1,-1},erosionIt);
+
+
     DetectorParameters params;
     //params.expansionDueToErosion=erosionIt;
     params.dicts.push_back(dict);
@@ -656,31 +672,79 @@ std::vector<std::vector<Marker>> connectedComponents(const std::vector<Marker> &
 
 
 std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Mat &src_gray){
-    std::vector<Marker>  markers_black,markers_white;
+
+
+     std::vector<Marker>  markers_black,markers_white;
     cv::Mat thresImage;
 
     //BLACK MARKERS
     cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(25,25),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
     thresImage=thresImage-src_gray;
     cv::threshold(thresImage, thresImage, 3, 255, cv::THRESH_BINARY);
-    markers_black=detect(board.dictionary,src_gray,thresImage,1);//black markers
+    //determine how many erosion iterations we will do, depending on the size of the image
+    int maxErodeIterations= std::max(1, int( (2.*src_gray.cols/2000.)+0.5));
+    std::vector<std::vector<Marker>  > markers_blackv(maxErodeIterations);
+    cv::Range range(0, maxErodeIterations);
 
-    //because we have shrink the borders for black markers, we will expand the corners a bit from the center
-    for(auto & marker:markers_black){
-        std::vector<cv::Point2f> newPoints;
-        for(int i=0;i<4;i++){
-            int idx0=i;
-            int idx1=(i+2) % 4;
-            auto dif=marker[idx0]-marker[idx1];
-            auto norm=cv::norm(dif);
-            auto p= marker[idx1]+  ((dif)/norm)*(norm+3   );
-            newPoints.push_back(p);
+   cv::parallel_for_(range, [&](const cv::Range& r) {
+       for(int i=r.start;i<r.end;i++){
+         cv::Mat thres=thresImage.clone();
+            markers_blackv[i]=detect(board.dictionary,src_gray,thres,i);//black markers
+            //because we have shrink the borders for black markers, we will expand the corners a bit from the center
+            for(auto & marker:markers_blackv[i]){
+                std::vector<cv::Point2f> newPoints;
+                for(int j=0;j<4;j++){
+                    int idx0=j;
+                    int idx1=(j+2) % 4;
+                    auto dif=marker[idx0]-marker[idx1];
+                    auto norm=cv::norm(dif);
+                    auto p= marker[idx1]+  ((dif)/norm)*(norm+ 2+i   );
+                    newPoints.push_back(p);
+                }
+                //replace the points by the new ones
+                for(int j=0;j<4;j++){
+                    marker[j]=newPoints[j];
+                }
+            }
         }
-        //replace the points by the new ones
-        for(int i=0;i<4;i++){
-            marker[i]=newPoints[i];
+    });
+
+    //merge them all into markers_black
+    for(const auto &v:markers_blackv){
+        for(const auto &m:v){
+            markers_black.push_back(m);
         }
     }
+    //now, we need to merge the different markers
+    if(markers_blackv.size()>1){
+
+        std::vector<Marker> unduplicated;
+        /// REMOVAL OF INNER DUPLICATED DETECTIONS OF THE SAME MARKER(INNER AND OUTER BORDER)
+        std::sort(markers_black.begin(), markers_black.end(),[](const Marker &a,const Marker &b){return a.id<b.id;});
+        std::vector<bool> toRemove(markers_black.size(), false);
+        for (int i = 0; i < int(markers_black.size()) - 1; i++)
+        {
+            for (int j = i + 1; j < int(markers_black.size()) && !toRemove[i]; j++)
+            {
+                if (markers_black[i].id == markers_black[j].id )
+                {
+                    if( markers_black[i].cornerMaxDistance(markers_black[j])<100)
+                        toRemove[i]=true;
+                }
+            }
+        }
+        //now move to DetectedMarkers these not marked for removal
+        for (unsigned int i = 0; i < markers_black.size(); i++)
+            if (!toRemove[i]) unduplicated.push_back(markers_black[i]);
+        markers_black=unduplicated;
+    }
+
+
+//    markers_black=detect(board.dictionary,src_gray,thresImage,erodeIterations);//black markers
+
+
+
+
 
     ///WHITE MARKERS
     cv::boxFilter( src_gray, thresImage, src_gray.type(), cv::Size(15,15),cv::Point(-1,-1), true, cv::BORDER_REPLICATE|cv::BORDER_ISOLATED );
@@ -689,37 +753,51 @@ std::vector<Marker> detectBWMarkers(const cv::aruco::CharucoBoard2 &board,cv::Ma
 
 
 
+    {
+        thresImage=255-thresImage;
+        cv::imwrite("before.jpg",thresImage);
+        thresImage=255-thresImage;
 
+    }
     //draw a line between opposite corners to break the continous contour of the white markers, which will help to detect them.
     for(auto m:markers_black){
         auto n02=m[2]-m[0];
         auto n02norm=cv::norm(n02);
         auto p0=m[0]-(n02/n02norm)* (n02norm/8);
         auto p1=m[0]+(n02/n02norm)* (n02norm/8);
-        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),2);
         p0=m[2]-(n02/n02norm)* (n02norm/8);
         p1=m[2]+(n02/n02norm)* (n02norm/8);
-        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),2);
 
         //same for the other diagonal
         auto n13=m[3]-m[1];
         auto n13norm=cv::norm(n13);
         p0=m[1]-(n13/n13norm)* (n13norm/8);
         p1=m[1]+(n13/n13norm)* (n13norm/8);
-        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),2);
         p0=m[3]-(n13/n13norm)* (n13norm/8);
         p1=m[3]+(n13/n13norm)* (n13norm/8);
-        cv::line(thresImage,p0,p1,cv::Scalar::all(255),1);
+        cv::line(thresImage,p0,p1,cv::Scalar::all(255),2);
     }
     thresImage=255-thresImage;
+    cv::imwrite("after.jpg",thresImage);
     src_gray=255-src_gray;
-    markers_white=detect(board.dictionary,src_gray,thresImage,1);//black markers
+    markers_white=detect(board.dictionary,src_gray,thresImage,1);//white markers
+
+    src_gray=255-src_gray;
+
 
     // Combine results from both
     std::vector<Marker> allMarkers;
     allMarkers.reserve(markers_black.size() + markers_white.size());
     allMarkers.insert(allMarkers.end(), markers_black.begin(), markers_black.end());
     allMarkers.insert(allMarkers.end(), markers_white.begin(), markers_white.end());
+
+
+
+
+
       return allMarkers;
 }
 
@@ -852,6 +930,7 @@ void cv::aruco::CharucoBoard2::generateImage(float markerSizePix, Mat &outImage)
     cv::rectangle(outImage,Rect(outImage.cols-border,0,border,border),Scalar::all(0),FILLED);
     cv::rectangle(outImage,Rect(0,outImage.rows-border,border,border),Scalar::all(0),FILLED);
     cv::rectangle(outImage,Rect(outImage.cols-border,outImage.rows-border,border,border),Scalar::all(0),FILLED);
+  //  cv::imshow("generate1",outImage);
 }
 
 void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, Mat &outImage, int marginSize, int borderBits) const
@@ -877,6 +956,7 @@ void cv::aruco::CharucoBoard2::generateImage(cv::Size outSize, Mat &outImage, in
     int offsetX = (outSize.width  - boardImg.cols) / 2;
     int offsetY = (outSize.height - boardImg.rows) / 2;
     boardImg.copyTo(outImage(Rect(offsetX, offsetY, boardImg.cols, boardImg.rows)));
+   // cv::imshow("generate2",boardImg);
 }
 
 
@@ -933,8 +1013,8 @@ void cv::aruco::CharucoBoard2::matchImagePoints(InputArrayOfArrays detectedCorne
         for(int row=0;row<3;row++){
             for(int col=0;col<3;col++,idx++){
                 cv::Point3f p3d;
-                p3d.x=col*markerLength;
-                p3d.y=row*markerLength;
+                p3d.x=(col-1.0f)*markerLength;
+                p3d.y=(1.0f-row)*markerLength;
                 p3d.z=0;
                 objPnts.push_back(p3d);
                 imgPnts.push_back(detectedCornersVecMat[idx].ptr<Point2f>(0)[0]);
@@ -950,8 +1030,8 @@ void cv::aruco::CharucoBoard2::matchImagePoints(InputArrayOfArrays detectedCorne
             int row=currentId / (bSize.width+1);
             int col=currentId % (bSize.width+1);
             cv::Point3f p3d;
-            p3d.x=col*markerLength;
-            p3d.y=row*markerLength;
+            p3d.x=(col-bSize.width/2.0f)*markerLength;
+            p3d.y=(bSize.height/2.0f-row)*markerLength;
             p3d.z=0;
             objPnts.push_back(p3d);
         }
@@ -1014,7 +1094,7 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
                     int gid1=getGlobalCornerID(marker.id,c,board);
                     int gid2=getGlobalCornerID(comp[idx/4].id,idx%4,board);
                     if(gid1!=gid2){
-//                        std::cout<<"Marker "<<marker.id<<" corner "<<c<<" is connected to marker "<<comp[idx/4].id<<" corner "<<idx%4<<" with distance "<<std::sqrt(dists[0])<<" and global corner ids "<<gid1<<" and "<<gid2<<std::endl;
+                         std::cout<<"Marker "<<marker.id<<" corner "<<c<<" is connected to marker "<<comp[idx/4].id<<" corner "<<idx%4<<" with distance "<<std::sqrt(dists[0])<<" and global corner ids "<<gid1<<" and "<<gid2<<std::endl;
                         is_consistent=false;
                     }
                 }
@@ -1119,16 +1199,17 @@ void cv::aruco::CharucoDetector2::detectBoard(InputArray image, OutputArray char
 
     //Markers
     // 2. Unpack results into OutputArrayOfArrays
-    copyVector2Output(allMarkers, markerCorners);
-
-    // 3. Assign to output ids
-    std::vector<int> marker_idsVec;
-    marker_idsVec.reserve(allMarkers.size());
-    for (const auto& m : allMarkers) marker_idsVec.push_back(m.id);
-
-    // Allocate and copy IDs
-    markerIds.create((int)marker_idsVec.size(), 1, CV_32SC1);
-    cv::Mat(marker_idsVec).copyTo(markerIds);
+    if(markerCorners.needed())
+        copyVector2Output(allMarkers, markerCorners);
+    if( markerIds.needed()){
+        // 3. Assign to output ids
+        std::vector<int> marker_idsVec;
+        marker_idsVec.reserve(allMarkers.size());
+        for (const auto& m : allMarkers) marker_idsVec.push_back(m.id);
+        // Allocate and copy IDs
+        markerIds.create((int)marker_idsVec.size(), 1, CV_32SC1);
+        cv::Mat(marker_idsVec).copyTo(markerIds);
+    }
 }
 void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::OutputArrayOfArrays _diamondCorners, cv::OutputArray _diamondIds,
                                       cv::InputOutputArrayOfArrays inMarkerCorners, cv::InputOutputArray inMarkerIds)    {
@@ -1256,3 +1337,4 @@ void cv::aruco::CharucoDetector2::detectDiamonds(cv::InputArray image, cv::Outpu
      }
 
 }
+
