@@ -135,7 +135,7 @@ At 75% occlusion, standard ChArUco recovers only 4 corners (often collinear and 
 
 If you use ChArUco2 in your research, please cite:
 
-> R. Muñoz-Salinas, F. J. Romero-Ramirez, S. Garrido-Jurado, "ChArUco2: Enhanced Calibration Boards with Dual Black-and-White Marker Detection", SoftwareX, 2026.
+> R. Muñoz-Salinas, F. J. Romero-Ramirez, S. Garrido-Jurado, "ChArUco2: Enhanced Calibration Boards with Dual Black-and-White Marker Detection", SoftwareX, submitted.
 
 Please also cite the foundational ArUco papers:
 
