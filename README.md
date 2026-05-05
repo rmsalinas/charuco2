@@ -6,6 +6,12 @@ Enhanced calibration boards with dual black-and-white marker detection.
 
 ChArUco2 is a C++ library that extends the standard OpenCV ChArUco framework by placing ArUco markers in **every** square of the board — standard markers in black squares and inverted markers in white squares — and by redesigning the ChArUco diamond for improved pose estimation accuracy.
 
+<p align="center">
+  <img src="board_image.jpg" width="48%" alt="ChArUco2 board"/>
+  &nbsp;
+  <img src="diamond_pose.jpg" width="48%" alt="ChArUco2 diamond pose estimation"/>
+</p>
+
 Key advantages over standard OpenCV ChArUco:
 
 * **Double marker density**: every square carries a marker, yielding $N \times M$ markers on an $N \times M$ board versus $\approx NM/2$ in the standard design.
