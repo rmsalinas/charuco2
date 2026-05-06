@@ -851,19 +851,19 @@ cv::aruco::CharucoBoard2::CharucoBoard2()
 
 }
 
-cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, float markerSeparation,  const  cv::aruco::Dictionary  &dictionary, cv::InputArray ids)
+cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size _bSize, float _markerLength, float _markerSeparation,  const  cv::aruco::Dictionary  &_dictionary, cv::InputArray _ids)
 {
-    (void)markerSeparation;
-    this->bSize = bSize;
-    this->dictionary = dictionary;
-    this->markerLength = markerLength;
+    (void)_markerSeparation;
+    this->bSize = _bSize;
+    this->dictionary = _dictionary;
+    this->markerLength = _markerLength;
     this->markerSeparation = 0;
     //set the ids
-    if(ids.empty()){
+    if(_ids.empty()){
         int markerId=0;
-        for(int y=0;y<bSize.height;y++){
-            for(int x= 0;x<bSize.width;x++,markerId++){
-                if(markerId>=dictionary.bytesList.rows){
+        for(int y=0;y<_bSize.height;y++){
+            for(int x= 0;x<_bSize.width;x++,markerId++){
+                if(markerId>=_dictionary.bytesList.rows){
                     CV_Error(cv::Error::StsBadArg, "Number of markers exceeds the number of markers in the dictionary");
                 }
                 this->ids.push_back(markerId);
@@ -871,8 +871,8 @@ cv::aruco::CharucoBoard2::CharucoBoard2(cv::Size bSize, float markerLength, floa
         }
     }
     else{
-        cv::Mat idsMat=ids.getMat();
-        if(idsMat.total()!=size_t(bSize.area()) || idsMat.type()!=CV_32SC1){
+        cv::Mat idsMat=_ids.getMat();
+        if(idsMat.total()!=size_t(_bSize.area()) || idsMat.type()!=CV_32SC1){
             CV_Error(cv::Error::StsBadArg, "Ids must be a vector of int with the same number of elements as the board size");
         }
         this->ids=std::vector<int>(idsMat.begin<int>(),idsMat.end<int>());
@@ -966,14 +966,9 @@ int cv::aruco::CharucoBoard2::getId(int row, int col) const
 
 void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedCorners, cv::InputArray detectedIds, cv::OutputArray objPoints, cv::OutputArray imgPoints) const
 {
-    std::vector<cv::Point2f>  cornersVec;
-    std::vector<int> idsVec;
-
-
-
-
 
     CV_Assert(detectedIds.total() > 0ull);
+    CV_Assert(detectedIds.total() == detectedCorners.total() || (detectedIds.total() == 4 && detectedCorners.total()==9 && bSize.width==2 && bSize.height==2));
 
     size_t nDetectedMarkers = detectedIds.total();
 
@@ -984,14 +979,17 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
     imgPnts.reserve(nDetectedMarkers);
 
     cv::Mat detectedIdsMat = detectedIds.getMat();
+    cv::Mat detectedCornersMat;
     std::vector<cv::Mat> detectedCornersVecMat;
 
-    detectedCorners.getMatVector(detectedCornersVecMat);
-   // CV_Assert((int)detectedCornersVecMat.front().total()*detectedCornersVecMat.front().channels() == 8);
+    if (detectedCorners.isMatVector()) {
+        detectedCorners.getMatVector(detectedCornersVecMat);
+    } else {
+        detectedCornersMat = detectedCorners.getMat();
+    }
 
     //its a diamond?
     if(detectedIds.total() == 4 && detectedCorners.total()==9 && bSize.width==2 && bSize.height==2){
-        CV_Assert((int)detectedCornersVecMat.size() == 9);
         //points are given in order, we do not need the detectedIds
         int idx=0;
         for(int row=0;row<3;row++){
@@ -1001,7 +999,11 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
                 p3d.y = row * markerLength;
                 p3d.z = 0;
                 objPnts.push_back(p3d);
-                imgPnts.push_back(detectedCornersVecMat[idx].ptr<cv::Point2f>(0)[0]);
+                if (detectedCorners.isMatVector()) {
+                    imgPnts.push_back(detectedCornersVecMat[idx].ptr<cv::Point2f>(0)[0]);
+                } else {
+                    imgPnts.push_back(detectedCornersMat.ptr<cv::Point2f>(0)[idx]);
+                }
             }
         }
     }
@@ -1009,7 +1011,11 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
     else{
 
         for(unsigned int i = 0; i < detectedIdsMat.total(); i++) {
-            imgPnts.push_back(detectedCornersVecMat[i].ptr<cv::Point2f>(0)[0]);
+            if (detectedCorners.isMatVector()) {
+                imgPnts.push_back(detectedCornersVecMat[i].ptr<cv::Point2f>(0)[0]);
+            } else {
+                imgPnts.push_back(detectedCornersMat.ptr<cv::Point2f>(0)[i]);
+            }
             int currentId = detectedIdsMat.at<int>(i);
             int row = currentId / (bSize.width+1);
             int col = currentId % (bSize.width+1);
@@ -1024,14 +1030,13 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
 
 
     // create output
-   cv:: Mat(objPnts).copyTo(objPoints);
-    cv::Mat(imgPnts).copyTo(imgPoints);
+    cv:: Mat(objPnts).copyTo(objPoints);
+     cv::Mat(imgPnts).copyTo(imgPoints);
 
 }
-
-cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &board)
+cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &_board)
 {
-this->board=board;
+this->board=_board;
 
 }
 
@@ -1039,8 +1044,8 @@ cv::aruco::CharucoDetector2::CharucoDetector2()
 {
 
 }
-void cv::aruco::CharucoDetector2::setBoard(const CharucoBoard2 &board){
-    this->board=board;
+void cv::aruco::CharucoDetector2::setBoard(const CharucoBoard2 &_board){
+    this->board=_board;
 }
 void cv::aruco::CharucoDetector2::detectBoard(cv::InputArray image, cv::OutputArray charucoCorners, cv::OutputArray charucoIds,
                                               cv::InputOutputArrayOfArrays markerCorners, cv::InputOutputArray markerIds)
@@ -1162,14 +1167,19 @@ void cv::aruco::CharucoDetector2::detectBoard(cv::InputArray image, cv::OutputAr
     }
 
     //now, assign the refined global corner positions back to the markers
-    for(auto [gid,corner_c]:global_corners){
+    for(auto it_gc = global_corners.begin(); it_gc != global_corners.end(); ++it_gc){
+        int gid = it_gc->first;
+        cv::Point2f corner_c = it_gc->second.first;
         //find in how many markers it is involved
-        for(auto [markerid,cornerid]:getMarkerCornersFromGlobalCornerID(gid,board)){
+        auto marker_corners = getMarkerCornersFromGlobalCornerID(gid,board);
+        for(auto it_mc = marker_corners.begin(); it_mc != marker_corners.end(); ++it_mc){
+            int markerid = it_mc->first;
+            int cornerid = it_mc->second;
             //see if the makrer id is detected
             auto markerid_copy=markerid;//capturing markerid only in C++20, lets use a copy for prev compilers
             auto it=std::find_if(allMarkers.begin(),allMarkers.end(),[markerid_copy](const Marker &m){return m.id==markerid_copy;});
             if(it!=allMarkers.end()){
-                (*it)[cornerid]=corner_c.first;
+                (*it)[cornerid]=corner_c;
             }
         }
     }
@@ -1178,9 +1188,9 @@ void cv::aruco::CharucoDetector2::detectBoard(cv::InputArray image, cv::OutputAr
     //copy results to output arrays
     std::vector<int> gidv;
     std::vector<cv::Point2f> gcorners;
-    for(auto [gid,corner_c]:global_corners){
-        gidv.push_back(gid);
-        gcorners.push_back(corner_c.first);
+    for(auto it_gc = global_corners.begin(); it_gc != global_corners.end(); ++it_gc){
+        gidv.push_back(it_gc->first);
+        gcorners.push_back(it_gc->second.first);
     }
     if (charucoIds.needed()) {
         cv::Mat(gidv).copyTo(charucoIds);
