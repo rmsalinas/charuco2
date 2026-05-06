@@ -1,13 +1,14 @@
 #pragma once
-#include <opencv2/objdetect/aruco_detector.hpp>
-namespace cv::aruco{
+#include "opencv2/objdetect/aruco_detector.hpp"
+#include "opencv2/objdetect/aruco_board.hpp"
+namespace  cv::aruco{
 
 class CharucoBoard2{
 public:
     cv::Size bSize={-1,-1};
-    Dictionary  dictionary;
+    cv::aruco::Dictionary  dictionary;
     std::vector<int> ids;
-    float markerLength, markerSeparation;
+    float markerLength = 0.f, markerSeparation = 0.f;
     CharucoBoard2();
     /**
      * @brief CharucoBoard2
@@ -17,9 +18,9 @@ public:
      * @param dictionary
      * @param ids
      */
-    CharucoBoard2(cv::Size bSize, float markerLength, float markerSeparation,const Dictionary &dictionary, InputArray ids = noArray());
-    void generateImage(float markerSizePix, Mat& outImage) const;
-    void generateImage(cv::Size outSize, cv::OutputArray outImage, int marginSize=0, int borderBits=1) const;
+    CharucoBoard2(cv::Size bSize, float markerLength, float markerSeparation,const cv::aruco::Dictionary &dictionary, cv::InputArray ids = cv::noArray());
+    void generateImage(int markerSizePix, cv::Mat& outImage) const;
+    void generateImage(cv::Size outSize, cv::Mat& outImage, int marginSize=0, int borderBits=1) const;
     //returns the row,col of a given marker id
     std::pair<int,int> getIdPos(int id)const;
     //returns the id at the row,col indicated
@@ -43,21 +44,23 @@ public:
      *
      * @sa solvePnP
      */
-    void matchImagePoints(InputArrayOfArrays detectedCorners, InputArray detectedIds,
-                                  OutputArray objPoints, OutputArray imgPoints) const;
+    void matchImagePoints(cv::InputArrayOfArrays detectedCorners, cv::InputArray detectedIds,
+                                  cv::OutputArray objPoints, cv::OutputArray imgPoints) const;
 
 };
 
 class     CharucoDetector2{
     CharucoBoard2 board;
-public:
+ public:
     CharucoDetector2(const CharucoBoard2& board);
+     CharucoDetector2();
+    void setBoard(const CharucoBoard2& board);
     //void detectBoard(InputArray image, OutputArray imgPoints,  OutputArray objPoints,OutputArray markerIds) const;
 
-    void detectBoard(InputArray image, OutputArray charucoCorners, OutputArray charucoIds,
-                     InputOutputArrayOfArrays markerCorners=cv::noArray(), InputOutputArray markerIds=cv::noArray());
-    void detectDiamonds(InputArray image, OutputArrayOfArrays _diamondCorners, OutputArray _diamondIds,
-                        InputOutputArrayOfArrays inMarkerCorners, InputOutputArray inMarkerIds) ;
+    void detectBoard(cv::InputArray image, cv::OutputArray charucoCorners, cv::OutputArray charucoIds,
+                     cv::InputOutputArrayOfArrays markerCorners=cv::noArray(), cv::InputOutputArray markerIds=cv::noArray());
+    void detectDiamonds(cv::InputArray image, cv::OutputArrayOfArrays _diamondCorners, cv::OutputArray _diamondIds,
+                        cv::InputOutputArrayOfArrays inMarkerCorners, cv::InputOutputArray inMarkerIds) ;
 
 
 };
