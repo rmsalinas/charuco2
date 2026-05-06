@@ -22,6 +22,9 @@ int main(int argc, char **argv){
     std::vector<cv::Vec4i>                dIds;
     std::vector<std::vector<cv::Point2f>> mCorners;
     std::vector<int>                      mIds;
+
+
+
     ddetector.detectDiamonds(image, dCorners, dIds, mCorners, mIds);
     drawDetectedDiamonds(image, dCorners, dIds);
     cv::imshow("Diamonds", image);
