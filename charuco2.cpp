@@ -5,7 +5,6 @@
 #include <map>
 #include <queue>
 
-#include <opencv2/highgui.hpp>
 #define CV_LOG_WARNING(void,msg) std::cerr << "Warning: " << msg << std::endl
 namespace     {
 /**
