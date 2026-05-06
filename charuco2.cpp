@@ -1030,8 +1030,8 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
 
 
     // create output
-    cv:: Mat(objPnts).copyTo(objPoints);
-     cv::Mat(imgPnts).copyTo(imgPoints);
+    cv::Mat(objPnts).copyTo(objPoints);
+    cv::Mat(imgPnts).copyTo(imgPoints);
 
 }
 cv::aruco::CharucoDetector2::CharucoDetector2(const CharucoBoard2 &_board)
