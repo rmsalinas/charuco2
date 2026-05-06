@@ -1,8 +1,8 @@
 #include "charuco2.h"
 #include "opencv2/core/hal/intrin.hpp"
+#include "opencv2/core/utils/logger.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/flann.hpp"
-#include "opencv2/core/utils/logger.hpp"
 #include <map>
 #include <queue>
 
@@ -997,9 +997,9 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
         for(int row=0;row<3;row++){
             for(int col=0;col<3;col++,idx++){
                 cv::Point3f p3d;
-                p3d.x=(col-1.0f)*markerLength;
-                p3d.y=(1.0f-row)*markerLength;
-                p3d.z=0;
+                p3d.x = col * markerLength;
+                p3d.y = row * markerLength;
+                p3d.z = 0;
                 objPnts.push_back(p3d);
                 imgPnts.push_back(detectedCornersVecMat[idx].ptr<cv::Point2f>(0)[0]);
             }
@@ -1011,12 +1011,12 @@ void cv::aruco::CharucoBoard2::matchImagePoints(cv::InputArrayOfArrays detectedC
         for(unsigned int i = 0; i < detectedIdsMat.total(); i++) {
             imgPnts.push_back(detectedCornersVecMat[i].ptr<cv::Point2f>(0)[0]);
             int currentId = detectedIdsMat.at<int>(i);
-            int row=currentId / (bSize.width+1);
-            int col=currentId % (bSize.width+1);
+            int row = currentId / (bSize.width+1);
+            int col = currentId % (bSize.width+1);
             cv::Point3f p3d;
-            p3d.x=(col-bSize.width/2.0f)*markerLength;
-            p3d.y=(bSize.height/2.0f-row)*markerLength;
-            p3d.z=0;
+            p3d.x = col * markerLength;
+            p3d.y = row * markerLength;
+            p3d.z = 0;
             objPnts.push_back(p3d);
         }
 
