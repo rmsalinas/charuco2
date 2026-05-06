@@ -2,10 +2,10 @@
 #include "opencv2/core/hal/intrin.hpp"
 #include "opencv2/imgproc.hpp"
 #include "opencv2/flann.hpp"
+#include "opencv2/core/utils/logger.hpp"
 #include <map>
 #include <queue>
 
-#define CV_LOG_WARNING(void,msg) std::cerr << "Warning: " << msg << std::endl
 namespace     {
 /**
  * @brief The Marker class is a marker detectable by the library
