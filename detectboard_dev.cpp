@@ -17,9 +17,12 @@ int main(int argc,char **argv) {
         // Basic ChArUco board setup
         cv::Size boardSize(9, 5); // Number of squares in X and Y direction
         cv::aruco::Dictionary dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_ARUCO_MIP_36h12);
-        cv::aruco::CharucoBoard2 board(boardSize, 1,1, dictionary);
+        std::vector<int> ids;
+        for(int id=0;id<boardSize.area();id++) ids.push_back(id+1);
+        cv::aruco::CharucoBoard2 board(boardSize, 1,1, dictionary,ids);
         cv::aruco::CharucoDetector2 detector(board);
 
+        //set the ids 1,....
 
         //detect the board and draw the corners
         cv::VideoCapture inputVideo;
@@ -39,7 +42,8 @@ int main(int argc,char **argv) {
                 if(!inputVideo.grab())break;
                 inputVideo.retrieve(image);
             }
-
+            //resize image in half
+            cv::resize(image,image,cv::Size(image.cols*0.15,image.rows*0.15));
 
             std::vector<int> markerIds;
             std::vector<std::vector<cv::Point2f>> markerCorners;
