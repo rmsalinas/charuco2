@@ -1,6 +1,10 @@
 # ChArUco2
 
-Enhanced calibration boards with dual black-and-white marker detection. [Download Preprint](https://drive.google.com/file/d/1aoD9GFGcO4tB5dvqpl2JVSoL3XS0mptK/view?usp=drive_link)
+Enhanced calibration boards with dual black-and-white marker detection. [Paper](https://www.sciencedirect.com/science/article/pii/S2352711026003249)
+
+For a fully functional new ArUco library including this work, please visit
+
+👉 **[https://github.com/rmsalinas/aruco2](https://github.com/rmsalinas/aruco2)**
 
 ## Introduction
 
